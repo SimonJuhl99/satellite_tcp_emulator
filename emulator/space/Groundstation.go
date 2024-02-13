@@ -99,6 +99,8 @@ func GroundStationGen(title string, id int, lat float64, long float64, isAccessP
 // 	return GS1.position
 // }
 
+// returns slice of GroundStation objects
+// retrieves GS information from file (one GS for each line)
 func LoadGroundStations(path string) ([]GroundStation, error) {
 	var groundStations []GroundStation
 	f, err := os.Open(path)
@@ -109,8 +111,10 @@ func LoadGroundStations(path string) ([]GroundStation, error) {
 
 	fileScanner := bufio.NewScanner(f)
 	fileScanner.Split(bufio.ScanLines)
+	// for each line in file: parse information, create GroundStation object and append to slice
 	for GroundStationID := 0; fileScanner.Scan(); GroundStationID++ { // returns false at end of file
 		line := fileScanner.Text()
+		// split line into a slice of strings containing ["location name", "latitude", "longitude", "is access point bool"]
 		line_elements := strings.Split(line, ",")
 		if len(line_elements) != 4 {
 			return groundStations, errors.New("failed parsing line")

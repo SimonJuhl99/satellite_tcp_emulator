@@ -1,3 +1,4 @@
+//  Get-ChildItem -Recurse | Select-String "string" -List | Select Path
 package main
 
 import (
@@ -40,17 +41,22 @@ var SatelliteIds []int
 var GroundStations []space.GroundStation
 
 func SetupLogger() *os.File {
+	// creating a console
 	consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr}
 
+	// temporary file using default dir and (i think) the name including the time of the file creation
 	tempFile, err := os.CreateTemp(os.TempDir(), "deleteme"+time.Now().Format(time.Kitchen))
 	if err != nil {
 		// Can we log an error before we have our logger? :)
-		log.Error().Err(err).Msg("there was an error creating a temporary file four our log")
+		log.Error().Err(err).Msg("there was an error creating a temporary file for our log")
 	}
 	fmt.Printf("The log file is allocated at %s\n", tempFile.Name())
 
+	// both write log message in console and file
 	multi := zerolog.MultiLevelWriter(consoleWriter, tempFile)
+	// configure logger time to unix timestamps (in ms)
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnixMs
+	// create logger instance using the multi level writer
 	log.Logger = zerolog.New(multi).With().Timestamp().Logger()
 	return tempFile
 }
@@ -65,6 +71,7 @@ func main() {
 	//* GETTING SAT DATA *//
 	var err error
 
+	// returns a slice containing instances of GroundStation struct
 	GroundStations, err = space.LoadGroundStations("./groundstations.txt")
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to load groundstations")
@@ -75,14 +82,18 @@ func main() {
 	// SatelliteIds, satellites, found := tle.LoadSatellites("./TD_full")
 	var graphSize int = len(GroundStations)
 	// var SatelliteIds []int
+
+	// create slice of OrbitalData structs
 	var satdata []space.OrbitalData
 	startTime := time.Date(2022, 9, 11, 12, 00, 00, 00, time.UTC)
 	endTime := time.Date(2022, 9, 21, 22, 00, 00, 00, time.UTC)
 	timeStep := 15 * time.Second
 	duration := endTime.Sub(startTime)
+	// retrieve data generated in satellite_positions.py (based on Israels simulation)
 	var satellite_positions_path string = "./constellation.parquet"
-	if strings.ToLower(os.Getenv("ISRAEL")) == "true" {
+	if strings.ToLower(os.Getenv("ISRAEL")) == "true" {														// <= QUESTION: Do you have an environment variable set controlling this decision?
 		log.Info().Msg("using simulated constellation")
+		// returns slice of OrbitalData structs, each struct containing positions (LatLong in degrees) for one satellite over time
 		satdata = database.LoadSatellitePositions(satellite_positions_path)
 		graphSize += len(satdata)
 		for _, orbitialData := range satdata {
@@ -93,14 +104,15 @@ func main() {
 		log.Info().Msg("using propagated constellation")
 		var satellites []satellite.Satellite
 		var found bool
-		SatelliteIds, satellites, found = tle.LoadSatellites("./OneWeb")
+		// Creates slice of satellite structs using "https://github.com/joshuaferrara/go-satellite"
+		SatelliteIds, satellites, found = tle.LoadSatellites("./OneWeb")						// <= QUESTION: What are those informations in the file? And how does the satellite struct work?
 		if !found {
 			log.Fatal().Int("satelliteCount", len(SatelliteIds)).Msg("Failed to load satellites")
 		}
 
 		graphSize += len(SatelliteIds)
+		// returns slice of OrbitalData structs, each struct containing positions (LatLong in degrees) for one satellite over time
 		satdata = space.GetSatData(satellites, SatelliteIds, startTime, timeStep, duration)
-
 	}
 	log.Info().Int("satelliteCount", len(SatelliteIds)).Msg("Found satellites")
 
@@ -112,15 +124,19 @@ func main() {
 	// } // Currently Unused
 
 	if os.Getenv("LOG_DATA") == "TRUE" {
-		var location string = "parquet"
+		var location string = "parquet"																							// TODO: remove hard coding
 		if location == "questdb" {
 			work_channel := make(chan database.SatelliteLineData)
+			// connect to QuestDB | work_channel is used to write to db
 			go database.WriteWorker(work_channel, "")
+			// for each satellite in satdata
 			for _, satellitedata := range satdata {
 				log.Info().Str("sattelliteid", satellitedata.Title).Msg("Processing Satellite")
 				logtime := startTime
+				// for each timestep (number of positions)
 				for i := range satellitedata.Position {
 					timestamp := logtime.UnixNano()
+					// write to database
 					work_channel <- database.SatelliteLineData{
 						SatelliteID: satellitedata.SatelliteId,
 						Title:       satellitedata.Title,
@@ -136,6 +152,7 @@ func main() {
 			close(work_channel)
 			return
 		} else if location == "parquet" {
+			// returns parquet writer which can handle data with the format of a FlatSatelliteLineData struct
 			pw, stop := database.WriteLogs("satdata_complete", new(database.FlatSatelliteLineData))
 			defer stop()
 

@@ -74,7 +74,9 @@ func LoadSatellites(filename string) (satelliteIds []int, satellites []gosat.Sat
 	if !found {
 		return nil, nil, false
 	}
+	// for each entry in slice of TLEdata structs (TLEdata keys: Line1, Line2, Title)
 	for _, tle := range tledata {
+		// Converts a two line element data set into a Satellite struct and runs initializes sgp4
 		satellite := gosat.TLEToSat(tle.Line1, tle.Line2, "wgs84")
 		satellites = append(satellites, satellite)
 		id := idFromTitleLine(tle.Title)

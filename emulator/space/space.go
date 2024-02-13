@@ -102,6 +102,8 @@ type OrbitalData struct {
 	//Time_steps []time.Time
 }
 
+
+// for each satellite, calculate positions for duration of simulation
 func getSatPos(sat_channel <-chan satellite, satData chan<- OrbitalData, startTime time.Time, timestep time.Duration, duration time.Duration) {
 	for sat := range sat_channel {
 		var data OrbitalData
@@ -111,7 +113,7 @@ func getSatPos(sat_channel <-chan satellite, satData chan<- OrbitalData, startTi
 		localStartTime := startTime
 		for i := 0; i < int(duration)/int(timestep); i++ {
 			localStartTime = localStartTime.Add(1 * timestep)
-			// gst := gosat.GSTimeFromDate(startTime.Year(), int(startTime.Month()), startTime.Day(), startTime.Hour(), startTime.Minute(), startTime.Second())
+			// calculate position and velocity vectors of satellite for a given time
 			pos, vel := gosat.Propagate(sat.gosat, localStartTime.Year(), int(localStartTime.Month()), localStartTime.Day(), localStartTime.Hour(), localStartTime.Minute(), localStartTime.Second())
 
 			// jday := gosat.JDay(localStartTime.Year(), int(localStartTime.Month()), localStartTime.Day(), localStartTime.Hour(), localStartTime.Minute(), localStartTime.Second())
@@ -138,9 +140,11 @@ func getSatPos(sat_channel <-chan satellite, satData chan<- OrbitalData, startTi
 }
 
 func LLAFromPosition(pos Vector3, time time.Time) LatLong {
+	// Galileo System Time (i think)
 	gst := gosat.GSTimeFromDate(time.Year(), int(time.Month()), time.Day(), time.Hour(), time.Minute(), time.Second())
-	//al, vel, ll
+	// Convert Earth Centered Inertial coordinated into equivalent LatLong (also returns altitude and velocity)
 	_, _, ll := gosat.ECIToLLA(pos.AsgosatVector(), gst)
+	// Convert LatLong in radians to LatLong in degrees
 	ll_deg := gosat.LatLongDeg(ll)
 	return LatLong{Latitude: ll_deg.Latitude, Longitude: ll_deg.Longitude}
 }

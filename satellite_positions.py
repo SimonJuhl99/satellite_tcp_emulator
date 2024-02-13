@@ -13,14 +13,17 @@ constellation = Constellation.Constellation(N, h, inclination, is_walker_star)
 print(constellation)
 
 M = 1000  # time steps
-NM = N * M
+NM = N * M                                                                      # <= QUESTION: Why do we need a length N*M array when we only use N*N?
 
 X, Y, Z = np.empty(NM), np.empty(NM), np.empty(NM)
 TimeIndex = np.empty(NM, dtype=np.int64)
 SatelliteID = np.empty(NM, dtype=np.int64)
 # line_index = 0
-for i in range(N):
+
+# N is the number of satellites
+for i in range(N):                                                              # <= QUESTION: Should this be the time M instead?
     constellation.rotate(delta_t)  # coordinates are populated by first rotation
+    # for each satellite in constellation, retrieve satellite object
     for i_s, satellite in enumerate(constellation.satellites):
         SatelliteID[(i * N) + i_s] = satellite.id
         TimeIndex[(i * N) + i_s] = i
@@ -38,5 +41,6 @@ dataframe = pd.DataFrame(
     },
 )
 
+# write dataframe to parquet file format
 dataframe.to_parquet("emulator/constellation.parquet", index=False)
 load = pd.read_parquet("emulator/constellation.parquet")
