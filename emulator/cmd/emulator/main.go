@@ -152,15 +152,17 @@ func main() {
 			close(work_channel)
 			return
 		} else if location == "parquet" {
-			// returns parquet writer which can handle data with the format of a FlatSatelliteLineData struct
+			// returns parquet writer which take in a FlatSatelliteLineData struct and writes it to a file
 			pw, stop := database.WriteLogs("satdata_complete", new(database.FlatSatelliteLineData))
 			defer stop()
-
+			// for each OrbitalData struct (each struct containing positions over time for one satellite)
 			for _, satellitedata := range satdata {
 				log.Info().Int("sattelliteid", satellitedata.SatelliteId).Msg("Processing Satellite")
 				logtime := startTime
+				// for each timestep (number of positions)
 				for i := range satellitedata.Position {
 					timestamp := logtime.UnixMilli()
+					// prepare data for
 					line_data := database.FlatSatelliteLineData{
 						SatelliteID: int32(satellitedata.SatelliteId),
 						PosX:        satellitedata.Position[i].X,
@@ -174,6 +176,7 @@ func main() {
 						Timestamp:   timestamp,
 						Index:       int32(i),
 					}
+					// write struct to parquet file
 					err := pw.Write(line_data)
 					if err != nil {
 						log.Fatal().Err(err).Msg("failed writing to parquet")
@@ -205,7 +208,9 @@ func main() {
 	// 	timedata[i] = startTime.Add(timeStep)
 	// }
 
+	// make channel with operating system signal
 	interruptSignal := make(chan os.Signal, 1)
+	// relay Ctrl+C interrupt signal to the channel just created
 	signal.Notify(interruptSignal, syscall.SIGINT)
 
 	//* STARTING PODMAN CONTAINERS *//
@@ -213,9 +218,13 @@ func main() {
 	podman.Cleanup()
 	defer podman.Cleanup()
 	containers := make([]string, len(SatelliteIds)+len(GroundStations))
+	// wait for all the goroutines launched here to finish
 	wg := sync.WaitGroup{}
+	// for each satellite
 	for i, satelliteid := range SatelliteIds {
+		// increment wg counter (when it reaches 0 the group is no longer blocked)
 		wg.Add(1)
+		// a goroutine is launched for each container creation, when done it will signal wg that it is done (decrement counter)
 		go func(index int, id int) {
 			defer wg.Done()
 			containers[index] = podman.CreateRunContainer("Sat"+strconv.Itoa(id), false, podman.SatelliteRawImage)
@@ -228,18 +237,18 @@ func main() {
 			containers[index] = podman.CreateRunContainer("GS"+gs_id, true, podman.GroundStationRawImage)
 		}(len(satdata)+i, gs.Title)
 	}
-
+	// Block until the wg counter goes back to 0 (all containers have been created)
 	wg.Wait()
 	// Make a map of all links and a subnet they can use to easy setup a link later
-	connections := AllConnections(&GroundStations)
+	connections := AllConnections(&GroundStations)		// slice of connection structs
 	links := setupLinkMap(containers, satdata, GroundStations, connections)
 	log.Info().Msg("created links") //.Interface("links", links)
 	//* GRAPH *//
 	log.Debug().Int("graphSize", len(SatelliteIds)).Msg("Size of Graph")
+	// create graph's vertices (ground stations and sats)
 	gn := graph.InstantiateGraph(graphSize) // T - nu
-	// gt := graph.InstantiateGraph(graphSize) // T - nu
-	// index := 47
-	var APRange float64 = 8.0 // km
+
+	var APRange float64 = 8.0 // km																								// QUESTION: Isn't 8km very little?
 	graph.SetupGraphAccessPointEdges(gn, graphSize, GroundStations, APRange)
 	log.Info().Float64("accessPointRange", APRange).Msg("graphAccessPointEdges")
 	var activelinks []string
@@ -491,22 +500,28 @@ type connection struct {
 func AllConnections(gsdata *[]space.GroundStation) (connections []connection) {
 	connectionData := "ElAlamo,Koto\n"
 	groundStationPairs := strings.Split(connectionData, "\n")
+	// for each connection
 	for _, gspair := range groundStationPairs {
-		if len(strings.TrimSpace(gspair)) < 2 {
-			continue
+		if len(strings.TrimSpace(gspair)) < 2 {																			// QUESTION: what does this do? will it every be false?
+			continue																																	// QUESTION: don't this prevent the rest of the code from running?
 		}
 		gspairlist := strings.Split(gspair, ",")
 		if len(gspairlist) != 2 {
 			panic("error in connection data")
 		}
 		var node1, node2 int = -1, -1
+		// for each GroundStation struct in slice
 		for i, gs := range *gsdata {
+			// if the first ground station specified in 'connectionData' matches the title of one of the GroundStation structs' title
 			if gspairlist[0] == gs.Title {
+				// assign the index of the GroundStation struct in the slice
 				node1 = i
 			}
 		}
 		for i, gs := range *gsdata {
+			// if the second ground station specified in 'connectionData' matches the title of one of the GroundStation structs' title
 			if gspairlist[1] == gs.Title {
+				// assign the index of the GroundStation struct in the slice
 				node2 = i
 			}
 		}
@@ -547,6 +562,7 @@ func setupLinkMap(containers []string, satdata []space.OrbitalData, gsdata []spa
 	octet4 := 0
 	cidr := "/29"
 	links := make(map[string]podman.LinkDetails)
+	// create links between all satellites
 	for node1, sat1 := range satdata {
 		for node2, sat2 := range satdata {
 			if node1 <= node2 { // Ignore half triangle and diagonal
@@ -565,8 +581,10 @@ func setupLinkMap(containers []string, satdata []space.OrbitalData, gsdata []spa
 				NodeTwoId:   containers[node2],
 			}
 
+			// insert satellite link details into map with its key created by linkNameFromNodeId()
 			links[linkNameFromNodeId(node1, node2)] = linkDetails
 			// log.Debug().Str("name", "S"+strconv.Itoa(node1)+"-S"+strconv.Itoa(node2)).Str("Subnet", links["S"+strconv.Itoa(node1)+"-S"+strconv.Itoa(node2)].Subnet).Msg("Link")
+			// change octets to avoid identical ip's
 			octet4 += 8
 			if octet4 == 248 {
 				octet4 = 0
@@ -618,7 +636,7 @@ func setupLinkMap(containers []string, satdata []space.OrbitalData, gsdata []spa
 		}
 	}
 
-	for node1, gs1 := range gsdata {
+	for node1, gs1 := range gsdata {																							// QUESTION: What is this direct link between two gs?
 		if !gs1.IsAP {
 			continue // only make satellite links with access points on the ground
 		}
@@ -637,7 +655,7 @@ func setupLinkMap(containers []string, satdata []space.OrbitalData, gsdata []spa
 				NetworkName: "P7-Link-AP" + gs1.Title + "-UE" + gs2.Title,
 				Subnet:      subnet,
 				NodeOneIP:   nodeOneIp,
-				NodeOneId:   containers[len(satdata)+node2], //this was 1
+				NodeOneId:   containers[len(satdata)+node2], //this was 1 <= QUESTION: What does this refer to?
 				NodeTwoIP:   nodeTwoIp,
 				NodeTwoId:   containers[len(satdata)+node1],
 			}

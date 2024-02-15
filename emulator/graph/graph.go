@@ -100,6 +100,7 @@ func SetupGraphGroundStationEdges(g *graph.Mutable, index int, simulationTime ti
 }
 
 func SetupGraphAccessPointEdges(g *graph.Mutable, graphSize int, gsdata []space.GroundStation, maxAPDistance float64) {
+	// QUESTIONS: isn't this the number of satellites?
 	graphOffset := graphSize - len(gsdata)
 	for gs1id, gs1 := range gsdata {
 		if !gs1.IsAP { // Compare all Access Points
@@ -113,7 +114,7 @@ func SetupGraphAccessPointEdges(g *graph.Mutable, graphSize int, gsdata []space.
 				continue
 			}
 
-			visible, distance := space.AccessPointVisible(&gs1, &gs2, maxAPDistance)
+			visible, distance := space.AccessPointVisible(&gs1, &gs2, maxAPDistance)	// QUESTION: to me it looks like u calculate the circle arc, but how does the work as a measure when u wanna figure out if the AP is visible?
 			if visible {
 				log.Debug().Bool("visible", visible).Float64("distance", distance).Msg("Access Point In Range")
 			}
