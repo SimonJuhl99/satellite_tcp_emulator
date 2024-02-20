@@ -260,6 +260,7 @@ func main() {
 	var newPath bool = false
 	simulationStart := time.Now()
 	log.Info().Time("simulationStart", simulationStart).Msg("starting simulation")
+
 	for index := 0; index < (int(duration)/(int(timeStep)))-1; index++ {
 		select {
 		case stopsignal := <-interruptSignal:
@@ -276,21 +277,28 @@ func main() {
 
 		// gt = graph.InstantiateGraph(graphSize) // T - nu
 		// graph.SetupGraphEdges(gt, (index+substep)/substep, satdata, maxFSODistance)
-		if index%2 == 0 {
+		if index%2 == 0 {																														// QUESTION: why only even index values
 			var err error
+			// create edge if two satellites are within maxFSODistance (edge cost calculated from distance)
 			graph.SetupGraphSatelliteEdges(gn, index, satdata, maxFSODistance)
 
 			var earthTime time.Time = startTime
 			earthTime = earthTime.Add(time.Duration(index * int(timeStep)))
 			log.Info().Time("earthTime", earthTime).Int("index", index).Msg("earthTime")
 			// log.Debug().Time("time", earthTime).Interface("gs1", groundstations[0].Title).Interface("gs2", groundstations[0].Title).Msg("adding gs edges at earth time")
+
+			// create edge if a GS and satellite are within maxFSODistance (edge cost calculated from distance)
 			graph.SetupGraphGroundStationEdges(gn, index, earthTime, satdata, GroundStations, maxFSODistance)
 
 			//Checking path vs new time step
 			//Getting the new path
 			if len(path) > 0 {
+				// shortest path computed from non-negative edges
+				// by adding the GS index (from file) to the number of satellites we get the GS vertex index in the graph
+				// the path is a slice of integers representing the indexes of the graph's vertices
 				nextPath, nextPathDistance, err = graph.GetShortestPath(gn, graphSize, connections[0].Source+len(satdata), connections[0].Destination+len(satdata))
 				if len(nextPath) != 0 {
+					// if the newly created path and old path are not equivalent, replace old path with new path
 					if !slices.Equal(path, nextPath) {
 						log.Info().Int64("pathDistance", pathDistance).Int64("nextPathDistance", nextPathDistance).Msg("path change")
 						path = nextPath
@@ -298,6 +306,7 @@ func main() {
 						newPath = true
 					}
 				}
+			// if there is no path, create a path
 			} else {
 				path, pathDistance, err = graph.GetShortestPath(gn, graphSize, connections[0].Source+len(satdata), connections[0].Destination+len(satdata))
 				if len(path) != 0 {
@@ -308,7 +317,8 @@ func main() {
 
 			// TODO handle no path available
 
-			if newPath {
+			if newPath {																															// QUESTION: will this only be false if graph.GetShortestPath returns a path with 0 elements? and why are we checking for that case?
+				// only set a satellite to be active if it is a part of the path
 				for _, sat := range satdata {
 					sat.Isactive = false
 				}
@@ -323,7 +333,7 @@ func main() {
 				}
 				log.Info().Ints("path", path).Int("index", index).Ints("containers", SatelliteIdsFromGraphIDs(path...)).Msg("new Path")
 
-				// Setting up the network and adding ips to routing
+				// Setting up the network/route and adding ips to routing
 				// prevlinks = activelinks
 				nextlinks = []string{}
 				for i := 0; i < len(path)-1; i++ {
@@ -335,7 +345,9 @@ func main() {
 					// iplookup[path[i]] = linkDeatils.NodeOneIP
 					// iplookup[path[i+1]] = linkDeatils.NodeTwoIP
 				}
+				// activelinks subtracted the links which also appear in nextlinks = links that need to be torn down
 				linkStopList := linkset.Sub(activelinks, nextlinks)
+				// nextlinks subtracted the links which also appear in activelinks = links that need to be setup
 				linkStartList := linkset.Sub(nextlinks, activelinks)
 
 				//Newlinks TODO subtract first
@@ -349,6 +361,7 @@ func main() {
 						podman.SetupLink(linkDetails)
 					}()
 				}
+				// waiting until links have been setup for all links in linkStartList
 				wg.Wait()
 
 				// Apply netem to new links
@@ -363,14 +376,16 @@ func main() {
 					}
 					satFrom := satdata[graphid_1]
 					satTo := satdata[graphid_2]
+					// if two satellites are within eachothers reach (maxAPDistance)
 					if space.Reachable(satFrom.Position[simulationTime], satTo.Position[simulationTime], maxFSODistance) {
 						wg.Add(1)
 						go func(simulationTime int, satFrom, satTo space.OrbitalData) {
 							defer wg.Done()
 							distance := satFrom.Position[simulationTime].Distance(satTo.Position[simulationTime])
-							latency_ms := space.Latency(distance) * 1000
+							latency_ms := space.Latency(distance) * 1000											// QUESTION: why milliseconds here when microsec the other place?
 							// Performs a nearly atomic remove/add on an existing node id. If the node does not exist yet it is created.
 							cost := int(math.Ceil(latency_ms))
+							// TODO: understand tc, qdisc, netem
 							command_forward := qdiscCommand("Sat", satTo.SatelliteId, cost)
 							container_name_forward := fmt.Sprintf("Sat%d", satFrom.SatelliteId)
 							podman.RunCommand(container_name_forward, command_forward)
@@ -385,6 +400,7 @@ func main() {
 
 				gs_name = GroundStations[path[1]-len(SatelliteIds)].Title
 				gs_satellite = satdata[path[2]]
+				// QUESTION: path[1] gives us the vertices in the path (hashed values?) but how can this give us the index of the GS?
 				podman.RunCommand("GS"+GroundStations[path[1]-len(SatelliteIds)].Title, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
 				podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
 
@@ -396,8 +412,10 @@ func main() {
 
 				// Setting up the routing table for all containers
 				log.Info().Interface("path", path).Msg("debug path")
+				// links from setupLinkMap
 				routing.LINKS = links
 
+				// slices of commands : "ip route replace destinationIP via nexthopIP"
 				commands, reversecommands := routing.RouteTables(path)
 
 				log.Debug().Interface("forward_commands", commands).Msg("FORWARD Routing")
@@ -484,7 +502,7 @@ func main() {
 }
 
 // Installs or replaces a qdisc atomically with the interface equal to satellite id and delay in milliseconds
-func qdiscCommand(net_if string, satelliteId int, delay int) string {
+func qdiscCommand(net_if string, satelliteId int, delay int) string {						// QUESTION: what does limit do?
 	return fmt.Sprintf("tc qdisc replace dev %s%d root netem delay %dms rate 100mbit limit 500", net_if, satelliteId, delay)
 }
 

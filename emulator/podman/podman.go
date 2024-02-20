@@ -209,10 +209,12 @@ func connectContainerToNetwork(cnname string, cip string, cid string, ifname str
 
 func RunCommand(nodeID string, command string) error {
 	cmd := strings.Split(command, " ")
+	// ctx is connection to podman socket
+	// create execution session in container with nodeID
 	execId, err := containers.ExecCreate(ctx, nodeID, &handlers.ExecCreateConfig{
 		ExecConfig: dockertypes.ExecConfig{
-			Privileged: true,
-			User:       "root",
+			Privileged: true,											// container is in privileged mode
+			User:       "root",										// root is gonna run the command
 			Cmd:        cmd,
 		},
 	})
@@ -220,6 +222,7 @@ func RunCommand(nodeID string, command string) error {
 		log.Error().Err(err).Msg("Failed to create exec command")
 		return err
 	}
+	// execute command in running container
 	err = containers.ExecStart(ctx, execId, &containers.ExecStartOptions{})
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to start exec command")
