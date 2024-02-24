@@ -58,7 +58,7 @@ func SetupGraphSatelliteEdges(g *graph.Mutable, index int, satdata []space.Orbit
 			if space.Reachable(satFrom.Position[index], satTo.Position[index], maxFSODistance) {
 
 				distance := satFrom.Position[index].Distance(satTo.Position[index]) // Refactoring space would allow on less distance computation per link
-				cost := space.Latency(distance) * 1000000																// QUESTION: is this conversion to microseconds?
+				cost := space.Latency(distance) * 1000000                           // QUESTION: is this conversion to microseconds?
 				// inserts edges with cost between node1 and node2
 				err = AddBothCost(g, len(satdata), node1, node2, int64(cost))
 
@@ -101,7 +101,6 @@ func SetupGraphGroundStationEdges(g *graph.Mutable, index int, simulationTime ti
 }
 
 func SetupGraphAccessPointEdges(g *graph.Mutable, graphSize int, gsdata []space.GroundStation, maxAPDistance float64) {
-	// QUESTIONS: isn't this the number of satellites?
 	graphOffset := graphSize - len(gsdata)
 	for gs1id, gs1 := range gsdata {
 		if !gs1.IsAP { // Compare all Access Points
@@ -115,7 +114,7 @@ func SetupGraphAccessPointEdges(g *graph.Mutable, graphSize int, gsdata []space.
 				continue
 			}
 
-			visible, distance := space.AccessPointVisible(&gs1, &gs2, maxAPDistance)	// QUESTION: to me it looks like u calculate the circle arc, but how does the work as a measure when u wanna figure out if the AP is visible?
+			visible, distance := space.AccessPointVisible(&gs1, &gs2, maxAPDistance) // QUESTION: to me it looks like u calculate the circle arc, but how does the work as a measure when u wanna figure out if the AP is visible?
 			if visible {
 				log.Debug().Bool("visible", visible).Float64("distance", distance).Msg("Access Point In Range")
 			}

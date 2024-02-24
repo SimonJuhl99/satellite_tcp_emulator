@@ -2,12 +2,10 @@ package main
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"os/signal"
 	"project/database"
 	"project/graph"
-	"project/linkset"
 	"project/podman"
 	"project/routing"
 	"project/space"
@@ -86,11 +84,11 @@ func main() {
 	var satdata []space.OrbitalData
 	startTime := time.Date(2022, 9, 11, 12, 00, 00, 00, time.UTC)
 	endTime := time.Date(2022, 9, 21, 22, 00, 00, 00, time.UTC)
-	timeStep := 15 * time.Second
+	timeStep := 1 * time.Second
 	duration := endTime.Sub(startTime)
 	// retrieve data generated in satellite_positions.py (based on Israels simulation)
-	var satellite_positions_path string = "./constellation.parquet"
-	if strings.ToLower(os.Getenv("ISRAEL")) == "true" { // <= QUESTION: Do you have an environment variable set controlling this decision?
+	var satellite_positions_path string = "./constellation-rorc.parquet"
+	if strings.ToLower(os.Getenv("ISRAEL")) == "true" {
 		log.Info().Msg("using simulated constellation")
 		// returns slice of OrbitalData structs, each struct containing positions (LatLong in degrees) for one satellite over time
 		satdata = database.LoadSatellitePositions(satellite_positions_path)
@@ -100,7 +98,9 @@ func main() {
 		}
 
 	} else {
-		log.Info().Msg("using propagated constellation")
+		log.Info().Msg("using propagated constellationdd")
+		log.Info().Msg(strings.ToLower(os.Getenv("ISRAEL")))
+
 		var satellites []satellite.Satellite
 		var found bool
 		// Creates slice of satellite structs using "https://github.com/joshuaferrara/go-satellite"
@@ -213,9 +213,12 @@ func main() {
 	signal.Notify(interruptSignal, syscall.SIGINT)
 
 	//* STARTING PODMAN CONTAINERS *//
+
+	/* rorc
 	podman.InitPodman()
 	podman.Cleanup()
 	defer podman.Cleanup()
+	*/
 	containers := make([]string, len(SatelliteIds)+len(GroundStations))
 	// wait for all the goroutines launched here to finish
 	wg := sync.WaitGroup{}
@@ -226,18 +229,19 @@ func main() {
 		// a goroutine is launched for each container creation, when done it will signal wg that it is done (decrement counter)
 		go func(index int, id int) {
 			defer wg.Done()
-			containers[index] = podman.CreateRunContainer("Sat"+strconv.Itoa(id), false, podman.SatelliteRawImage)
+			containers[index] = "Sat" + strconv.Itoa(id) // rorc
 		}(i, satelliteid) // ¯\_(ツ)_/¯
 	}
 	for i, gs := range GroundStations {
 		wg.Add(1)
 		go func(index int, gs_id string) {
 			defer wg.Done()
-			containers[index] = podman.CreateRunContainer("GS"+gs_id, true, podman.GroundStationRawImage)
+			containers[index] = "GS" + gs_id // rorc
 		}(len(satdata)+i, gs.Title)
 	}
 	// Block until the wg counter goes back to 0 (all containers have been created)
 	wg.Wait()
+
 	// Make a map of all links and a subnet they can use to easy setup a link later
 	connections := AllConnections(&GroundStations) // slice of connection structs
 	links := setupLinkMap(containers, satdata, GroundStations, connections)
@@ -248,9 +252,10 @@ func main() {
 	gn := graph.InstantiateGraph(graphSize) // T - nu
 
 	var APRange float64 = 8.0 // km																								// QUESTION: Isn't 8km very little?
+	// Edge that solves small queue
 	graph.SetupGraphAccessPointEdges(gn, graphSize, GroundStations, APRange)
 	log.Info().Float64("accessPointRange", APRange).Msg("graphAccessPointEdges")
-	var activelinks []string
+	//var activelinks []string
 	var nextlinks []string
 	// var prevlinks []string½
 	// var substep int = 15 // 15/15s=1Hz
@@ -260,7 +265,15 @@ func main() {
 	simulationStart := time.Now()
 	log.Info().Time("simulationStart", simulationStart).Msg("starting simulation")
 
+	f, err := os.Create("/tmp/route-changes")
+	if err != nil {
+		log.Error().Err(err).Msg("Error in creating route change file")
+	}
+	defer f.Close()
+
 	for index := 0; index < (int(duration)/(int(timeStep)))-1; index++ {
+		newPath = false
+
 		select {
 		case stopsignal := <-interruptSignal:
 			log.Info().Interface("signal", stopsignal).Msg("shutting down")
@@ -276,180 +289,209 @@ func main() {
 
 		// gt = graph.InstantiateGraph(graphSize) // T - nu
 		// graph.SetupGraphEdges(gt, (index+substep)/substep, satdata, maxFSODistance)
-		if index%2 == 0 { // QUESTION: why only even index values
-			newPath = false
 
-			var err error
-			// create edge if two satellites are within maxFSODistance (edge cost calculated from distance)
-			graph.SetupGraphSatelliteEdges(gn, index, satdata, maxFSODistance)
+		var err error
+		// create edge if two satellites are within maxFSODistance (edge cost calculated from distance)
+		graph.SetupGraphSatelliteEdges(gn, index, satdata, maxFSODistance)
 
-			var earthTime time.Time = startTime
-			earthTime = earthTime.Add(time.Duration(index * int(timeStep)))
-			log.Info().Time("earthTime", earthTime).Int("index", index).Msg("earthTime")
-			// log.Debug().Time("time", earthTime).Interface("gs1", groundstations[0].Title).Interface("gs2", groundstations[0].Title).Msg("adding gs edges at earth time")
+		var earthTime time.Time = startTime
+		earthTime = earthTime.Add(time.Duration(index * int(timeStep)))
+		log.Info().Time("earthTime", earthTime).Int("index", index).Msg("earthTime")
+		// log.Debug().Time("time", earthTime).Interface("gs1", groundstations[0].Title).Interface("gs2", groundstations[0].Title).Msg("adding gs edges at earth time")
 
-			// create edge if a GS and satellite are within maxFSODistance (edge cost calculated from distance)
-			graph.SetupGraphGroundStationEdges(gn, index, earthTime, satdata, GroundStations, maxFSODistance)
+		// create edge if a GS and satellite are within maxFSODistance (edge cost calculated from distance)
+		graph.SetupGraphGroundStationEdges(gn, index, earthTime, satdata, GroundStations, maxFSODistance)
 
-			//Checking path vs new time step
-			//Getting the new path
-			if len(path) > 0 {
-				// shortest path computed from non-negative edges
-				// by adding the GS index (from file) to the number of satellites we get the GS vertex index in the graph
-				// the path is a slice of integers representing the indexes of the graph's vertices
-				nextPath, nextPathDistance, err = graph.GetShortestPath(gn, graphSize, connections[0].Source+len(satdata), connections[0].Destination+len(satdata))
-				if len(nextPath) != 0 {
-					// if the newly created path and old path are not equivalent, replace old path with new path
-					if !slices.Equal(path, nextPath) {
-						log.Info().Int64("pathDistance", pathDistance).Int64("nextPathDistance", nextPathDistance).Msg("path change")
-						path = nextPath
-						pathDistance = nextPathDistance
-						newPath = true
-					}
-				}
-				// if there is no path, create a path
-			} else {
-				path, pathDistance, err = graph.GetShortestPath(gn, graphSize, connections[0].Source+len(satdata), connections[0].Destination+len(satdata))
-				if len(path) != 0 {
-					newPath = true
-					log.Debug().Int64("path_distance", pathDistance).Msg("new path")
-				}
+		//Checking path vs new time step
+		//Getting the new path
+
+		if len(path) <= 0 {
+			path, pathDistance, err = graph.GetShortestPath(gn, graphSize, connections[0].Source+len(satdata), connections[0].Destination+len(satdata))
+			if err != nil {
+				log.Error().Err(err).Msg("Error in shortest path")
 			}
-
-			// TODO handle no path available
-
-			if newPath { // QUESTION: will this only be false if graph.GetShortestPath returns a path with 0 elements? and why are we checking for that case?
-				// only set a satellite to be active if it is a part of the path
-				for _, sat := range satdata {
-					sat.Isactive = false
+			if len(path) != 0 {
+				var pathUnits string = ""
+				for unit := 0; unit < len(path); unit++ {
+					pathUnits += containers[path[unit]] + " "
 				}
-				for _, satellite := range path {
-					if satellite < len(satdata) {
-						satdata[satellite].Isactive = true
-						// TODO modify so groundstations work with tc aswell
-					}
-				}
+				var pathInfo string = "New path found at time " + strconv.Itoa(index) + "\t" + pathUnits + "\n"
+				_, err := f.WriteString(pathInfo)
 				if err != nil {
-					log.Error().Err(err).Msg("Error in shortest path")
+					log.Error().Err(err).Msg("Error writing new path to file")
 				}
-				log.Info().Ints("path", path).Int("index", index).Ints("containers", SatelliteIdsFromGraphIDs(path...)).Msg("new Path")
-
-				// Setting up the network/route and adding ips to routing
-				// prevlinks = activelinks
-				nextlinks = []string{}
-				for i := 0; i < len(path)-1; i++ {
-					linkName := linkNameFromNodeId(path[i], path[i+1])
-					nextlinks = append(nextlinks, linkName)
-					log.Info().Str("Link", linkName).Strs("nextlinks", nextlinks).Msg("marking link for nextpath")
-					// Setting up the network for link
-
-					// iplookup[path[i]] = linkDeatils.NodeOneIP
-					// iplookup[path[i+1]] = linkDeatils.NodeTwoIP
-				}
-				// activelinks subtracted the links which also appear in nextlinks = links that need to be torn down
-				linkStopList := linkset.Sub(activelinks, nextlinks)
-				// nextlinks subtracted the links which also appear in activelinks = links that need to be setup
-				linkStartList := linkset.Sub(nextlinks, activelinks)
-
-				//Newlinks TODO subtract first
-				wg := sync.WaitGroup{}
-				for _, link := range linkStartList {
-					wg.Add(1)
-					linkDetails := links[link]
-					log.Debug().Interface("link", linkDetails).Msg("Setting up link")
-					go func() {
-						defer wg.Done()
-						podman.SetupLink(linkDetails)
-					}()
-				}
-				// waiting until links have been setup for all links in linkStartList
-				wg.Wait()
-
-				// Apply netem to new links
-				//* TC command update *//
-				simulationTime := index
-				wg = sync.WaitGroup{}
-				for pathindex := 0; pathindex < len(path)-1; pathindex++ {
-					graphid_1 := path[pathindex]
-					graphid_2 := path[pathindex+1]
-					if graphid_1 >= len(satdata) || graphid_2 >= len(satdata) { // Skip ground stations
-						continue
+				f.Sync()
+				newPath = true
+				log.Debug().Int64("path_distance", pathDistance).Msg("new path")
+			}
+		} else {
+			// shortest path computed from non-negative edges
+			// by adding the GS index (from file) to the number of satellites we get the GS vertex index in the graph
+			// the path is a slice of integers representing the indexes of the graph's vertices
+			nextPath, nextPathDistance, err = graph.GetShortestPath(gn, graphSize, connections[0].Source+len(satdata), connections[0].Destination+len(satdata))
+			if err != nil {
+				log.Error().Err(err).Msg("Error in shortest path")
+			}
+			if len(nextPath) != 0 {
+				// if the newly created path and old path are not equivalent, replace old path with new path
+				if !slices.Equal(path, nextPath) {
+					var pathUnits string = ""
+					for unit := 0; unit < len(nextPath); unit++ {
+						pathUnits += containers[nextPath[unit]] + " "
 					}
-					satFrom := satdata[graphid_1]
-					satTo := satdata[graphid_2]
-					// if two satellites are within eachothers reach (maxAPDistance)
-					if space.Reachable(satFrom.Position[simulationTime], satTo.Position[simulationTime], maxFSODistance) {
-						wg.Add(1)
-						go func(simulationTime int, satFrom, satTo space.OrbitalData) {
-							defer wg.Done()
-							distance := satFrom.Position[simulationTime].Distance(satTo.Position[simulationTime])
-							latency_ms := space.Latency(distance) * 1000 // QUESTION: why milliseconds here when microsec the other place?
-							// Performs a nearly atomic remove/add on an existing node id. If the node does not exist yet it is created.
-							cost := int(math.Ceil(latency_ms))
-							// TODO: understand tc, qdisc, netem
-							command_forward := qdiscCommand("Sat", satTo.SatelliteId, cost)
-							container_name_forward := fmt.Sprintf("Sat%d", satFrom.SatelliteId)
-							podman.RunCommand(container_name_forward, command_forward)
-							command_reverse := qdiscCommand("Sat", satFrom.SatelliteId, cost)
-							container_name_reverse := fmt.Sprintf("Sat%d", satTo.SatelliteId)
-							podman.RunCommand(container_name_reverse, command_reverse)
-						}(simulationTime, satFrom, satTo)
+					var pathInfo string = "Path change found at time " + strconv.Itoa(index) + "\t" + pathUnits + "\n"
+					_, err := f.WriteString(pathInfo)
+					if err != nil {
+						log.Error().Err(err).Msg("Error writing new path to file")
 					}
+					f.Sync()
+					log.Info().Int64("pathDistance", pathDistance).Int64("nextPathDistance", nextPathDistance).Msg("path change") // LOG THIS
+					path = nextPath
+					pathDistance = nextPathDistance
+					newPath = true
 				}
-				var gs_name string
-				var gs_satellite space.OrbitalData
+			}
+		}
 
-				gs_name = GroundStations[path[1]-len(SatelliteIds)].Title
-				gs_satellite = satdata[path[2]]
-				// QUESTION: path[1] gives us the vertices in the path (hashed values?) but how can this give us the index of the GS?
-				podman.RunCommand("GS"+GroundStations[path[1]-len(SatelliteIds)].Title, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-				podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+		// TODO handle no path available
 
-				gs_name = GroundStations[path[len(path)-(2-1)]-len(SatelliteIds)].Title
-				gs_satellite = satdata[path[3-1]]
-				podman.RunCommand("GS"+GroundStations[path[len(path)-(2-1)]-len(SatelliteIds)].Title, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-				podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
-				wg.Wait()
-
-				// Setting up the routing table for all containers
-				log.Info().Interface("path", path).Msg("debug path")
-				// links from setupLinkMap
-				routing.LINKS = links
-
-				// slices of commands : "ip route replace destinationIP via nexthopIP"
-				commands, reversecommands := routing.RouteTables(path)
-
-				log.Debug().Interface("forward_commands", commands).Msg("FORWARD Routing")
-				for container_id, command := range commands {
-					if container_id < len(SatelliteIds) {
-						podman.RunCommand("Sat"+strconv.Itoa(SatelliteIds[container_id]), command)
-					} else {
-						podman.RunCommand("GS"+GroundStations[container_id-len(SatelliteIds)].Title, command)
-					}
+		if newPath {
+			// only set a satellite to be active if it is a part of the path
+			for _, sat := range satdata {
+				sat.Isactive = false
+			}
+			for _, satellite := range path {
+				if satellite < len(satdata) {
+					satdata[satellite].Isactive = true
+					// TODO modify so groundstations work with tc aswell
 				}
-				log.Debug().Interface("reverse_commands", reversecommands).Msg("REVERSE Routing")
-				for container_id, command := range reversecommands {
-					if container_id < len(SatelliteIds) {
-						podman.RunCommand("Sat"+strconv.Itoa(SatelliteIds[container_id]), command)
-					} else {
-						podman.RunCommand("GS"+GroundStations[container_id-len(SatelliteIds)].Title, command)
-					}
-				}
+			}
+			log.Info().Ints("path", path).Int("index", index).Ints("containers", SatelliteIdsFromGraphIDs(path...)).Msg("new Path")
 
-				for _, link := range linkStopList {
-					linkDetails := links[link]
-					log.Debug().Interface("link", linkDetails).Msg("Tearing down link")
-					go podman.TearDownLink(linkDetails)
-				}
-				activelinks = nextlinks
+			// Setting up the network/route and adding ips to routing
+			// prevlinks = activelinks
+			nextlinks = []string{}
+			for i := 0; i < len(path)-1; i++ {
+				linkName := linkNameFromNodeId(path[i], path[i+1])
+				nextlinks = append(nextlinks, linkName)
+				log.Info().Str("Link", linkName).Strs("nextlinks", nextlinks).Msg("marking link for nextpath")
+				// Setting up the network for link
 
-			} else {
-				log.Warn().Msg("no path found available")
+				// iplookup[path[i]] = linkDeatils.NodeOneIP
+				// iplookup[path[i+1]] = linkDeatils.NodeTwoIP
 			}
 
+			/* rorc
+			// activelinks subtracted the links which also appear in nextlinks = links that need to be torn down
+			linkStopList := linkset.Sub(activelinks, nextlinks)
+			// nextlinks subtracted the links which also appear in activelinks = links that need to be setup
+			linkStartList := linkset.Sub(nextlinks, activelinks)
+
+			//Newlinks TODO subtract first
+
+			wg := sync.WaitGroup{}
+			for _, link := range linkStartList {
+				wg.Add(1)
+				linkDetails := links[link]
+				log.Debug().Interface("link", linkDetails).Msg("Setting up link")
+				go func() {
+					defer wg.Done()
+					podman.SetupLink(linkDetails)
+				}()
+			}
+			// waiting until links have been setup for all links in linkStartList
+			wg.Wait()
+			*/
+
+			// Apply netem to new links
+			//* TC command update *//
+			/*simulationTime := index
+			wg = sync.WaitGroup{}
+			for pathindex := 0; pathindex < len(path)-1; pathindex++ {
+				graphid_1 := path[pathindex]
+				graphid_2 := path[pathindex+1]
+				if graphid_1 >= len(satdata) || graphid_2 >= len(satdata) { // Skip ground stations
+					continue
+				}
+				satFrom := satdata[graphid_1]
+				satTo := satdata[graphid_2]
+				// if two satellites are within eachothers reach (maxAPDistance)
+				if space.Reachable(satFrom.Position[simulationTime], satTo.Position[simulationTime], maxFSODistance) {
+					wg.Add(1)
+					go func(simulationTime int, satFrom, satTo space.OrbitalData) {
+						defer wg.Done()
+						distance := satFrom.Position[simulationTime].Distance(satTo.Position[simulationTime])
+						latency_ms := space.Latency(distance) * 1000
+						cost := int(math.Ceil(latency_ms))
+						// TODO: understand tc, qdisc, netem
+						command_forward := qdiscCommand("Sat", satTo.SatelliteId, cost)
+						container_name_forward := fmt.Sprintf("Sat%d", satFrom.SatelliteId)
+						podman.RunCommand(container_name_forward, command_forward)
+						command_reverse := qdiscCommand("Sat", satFrom.SatelliteId, cost)
+						container_name_reverse := fmt.Sprintf("Sat%d", satTo.SatelliteId)
+						podman.RunCommand(container_name_reverse, command_reverse)
+					}(simulationTime, satFrom, satTo)
+				}
+			}
+			var gs_name string
+			var gs_satellite space.OrbitalData
+
+			gs_name = GroundStations[path[1]-len(SatelliteIds)].Title
+			gs_satellite = satdata[path[2]]
+			// QUESTION: path[1] gives us the vertices in the path (hashed values?) but how can this give us the index of the GS?
+			podman.RunCommand("GS"+GroundStations[path[1]-len(SatelliteIds)].Title, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
+			podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+
+			gs_name = GroundStations[path[len(path)-(2-1)]-len(SatelliteIds)].Title
+			gs_satellite = satdata[path[3-1]]
+			podman.RunCommand("GS"+GroundStations[path[len(path)-(2-1)]-len(SatelliteIds)].Title, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
+			podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+			wg.Wait()
+			*/
+
+			// Setting up the routing table for all containers
+			log.Info().Interface("path", path).Msg("debug path")
+			// links from setupLinkMap
+			routing.LINKS = links
+
+			// slices of commands : "ip route replace destinationIP via nexthopIP"
+			commands, reversecommands := routing.RouteTables(path)
+
+			log.Debug().Interface("forward_commands", commands).Msg("FORWARD Routing")
+			/* rorc
+			for container_id, command := range commands {
+				if container_id < len(SatelliteIds) {
+					podman.RunCommand("Sat"+strconv.Itoa(SatelliteIds[container_id]), command)
+				} else {
+					podman.RunCommand("GS"+GroundStations[container_id-len(SatelliteIds)].Title, command)
+				}
+			}
+			*/
+			log.Debug().Interface("reverse_commands", reversecommands).Msg("REVERSE Routing")
+			/* rorc
+			for container_id, command := range reversecommands {
+				if container_id < len(SatelliteIds) {
+					podman.RunCommand("Sat"+strconv.Itoa(SatelliteIds[container_id]), command)
+				} else {
+					podman.RunCommand("GS"+GroundStations[container_id-len(SatelliteIds)].Title, command)
+				}
+			}
+
+
+			for _, link := range linkStopList {
+				linkDetails := links[link]
+				log.Debug().Interface("link", linkDetails).Msg("Tearing down link")
+				go podman.TearDownLink(linkDetails)
+			}
+			activelinks = nextlinks
+			*/
+
+		} else {
+			log.Warn().Msg("no path found available")
 		}
 
 		//* TC command update *//
+		/* rorc
 		simulationTime := index
 		wg := sync.WaitGroup{}
 		for pathindex := 0; pathindex < len(path)-1; pathindex++ {
@@ -477,6 +519,7 @@ func main() {
 				}(simulationTime, satFrom, satTo)
 			}
 		}
+
 		var gs_name string
 		var gs_satellite space.OrbitalData
 
@@ -490,7 +533,7 @@ func main() {
 		podman.RunCommand("GS"+GroundStations[path[len(path)-(2-1)]-len(SatelliteIds)].Title, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
 		podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
 		wg.Wait()
-
+		*/
 		//Wait until next iteration based on time.
 		simulationstartCopy := simulationStart
 		targetTime := simulationstartCopy.Add(time.Duration(index * int(timeStep)))
@@ -499,17 +542,18 @@ func main() {
 			log.Warn().Bool("computerIsPotato", tooSlow).Time("targetTime", targetTime).Dur("duration", time.Since(targetTime)).Msg("simulation not running in real time")
 		}
 		time.Sleep(time.Until((targetTime)))
+
 	}
 }
 
 // Installs or replaces a qdisc atomically with the interface equal to satellite id and delay in milliseconds
-func qdiscCommand(net_if string, satelliteId int, delay int) string { // QUESTION: what does limit do?
+/*func qdiscCommand(net_if string, satelliteId int, delay int) string { // QUESTION: what does limit do?
 	return fmt.Sprintf("tc qdisc replace dev %s%d root netem delay %dms rate 100mbit limit 500", net_if, satelliteId, delay)
 }
 
 func qdiscCommandGS(net_if string, gs_title string) string {
 	return fmt.Sprintf("tc qdisc replace dev %s%s root netem delay %dms rate 100mbit limit 500", net_if, gs_title, 0)
-}
+}*/
 
 type connection struct {
 	Source      int `parquet:"source"`

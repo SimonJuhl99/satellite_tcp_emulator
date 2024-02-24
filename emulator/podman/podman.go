@@ -24,9 +24,11 @@ import (
 )
 
 var (
-	ctx                   context.Context
-	SatelliteRawImage     = "registry.hub.docker.com/mulvadt/satellite:latest"
-	GroundStationRawImage = "registry.hub.docker.com/mulvadt/groundstation:latest"
+	ctx context.Context
+	//SatelliteRawImage = "registry.hub.docker.com/mulvadt/satellite:latest"
+	SatelliteRawImage = "docker.io/mulvadt/satellite:latest"
+	//GroundStationRawImage = "registry.hub.docker.com/mulvadt/groundstation:latest"
+	GroundStationRawImage = "docker.io/mulvadt/groundstation:latest"
 	// rawImage = "localhost/satellite"
 )
 
@@ -213,8 +215,8 @@ func RunCommand(nodeID string, command string) error {
 	// create execution session in container with nodeID
 	execId, err := containers.ExecCreate(ctx, nodeID, &handlers.ExecCreateConfig{
 		ExecConfig: dockertypes.ExecConfig{
-			Privileged: true,											// container is in privileged mode
-			User:       "root",										// root is gonna run the command
+			Privileged: true,   // container is in privileged mode
+			User:       "root", // root is gonna run the command
 			Cmd:        cmd,
 		},
 	})
