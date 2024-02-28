@@ -21,7 +21,7 @@ SatelliteID = np.empty(NM, dtype=np.int64)
 # line_index = 0
 
 # N is the number of satellites
-for i in range(N):                                                              # <= QUESTION: Should this be the time M instead?
+for i in range(M):                                                              # <= QUESTION: Should this be the time M instead?
     constellation.rotate(delta_t)  # coordinates are populated by first rotation
     # for each satellite in constellation, retrieve satellite object
     for i_s, satellite in enumerate(constellation.satellites):

@@ -93,7 +93,7 @@ func main() {
 	if strings.ToLower(os.Getenv("ISRAEL")) == "true" { // <= QUESTION: Do you have an environment variable set controlling this decision?
 		log.Info().Msg("using simulated constellation")
 		// returns slice of OrbitalData structs, each struct containing positions (LatLong in degrees) for one satellite over time
-		satdata = database.LoadSatellitePositions(satellite_positions_path)
+		satdata = database.LoadSatellitePositions(satellite_positions_path, "OneWeb")
 		graphSize += len(satdata)
 		for _, orbitialData := range satdata {
 			SatelliteIds = append(SatelliteIds, orbitialData.SatelliteId)

@@ -47,7 +47,7 @@ type FlatSatelliteLineData struct {
 //		PosZ        float64 `json:"pos_z" parquet:"name=pos_z, type=DOUBLE"`
 //		// Timestamp   int64   `parquet:"name=timestamp, type=INT64, convertedtype=TIMESTAMP_MILLIS"`
 //	}
-type FlatSatelliteLineDataIsrael struct {																				// <= QUESTION: What is this struct used for?
+type FlatSatelliteLineDataIsrael struct { // <= QUESTION: What is this struct used for?
 	SatelliteID *int64   `json:"satellite_id" parquet:"name=satellite_id, type=INT64"`
 	Index       *int64   `json:"time_index" parquet:"name=time_index, type=INT64"`
 	PosX        *float64 `json:"pos_x" parquet:"name=pos_x, type=DOUBLE"`
@@ -88,11 +88,11 @@ func WriteLogs(fname string, datatype interface{}) (filewriter *writer.ParquetWr
 func WriteWorker(lineData <-chan SatelliteLineData, database_address string) error {
 	var address string = database_address
 	if database_address == "" {
-		address = "100.113.13.30:9009"																							// TODO: Important
+		address = "100.113.13.30:9009" // TODO: Important
 	}
 	ctx := context.Background()
 	// Connect to QuestDB running on 127.0.0.1:9009
-	sender, err := qdb.NewLineSender(ctx, qdb.WithAddress(address))								// https://questdb.io/docs/reference/api/ilp/overview/
+	sender, err := qdb.NewLineSender(ctx, qdb.WithAddress(address)) // https://questdb.io/docs/reference/api/ilp/overview/
 	if err != nil {
 		return errors.New("failed to connect to QuestDB: " + err.Error())
 	}
@@ -103,7 +103,7 @@ func WriteWorker(lineData <-chan SatelliteLineData, database_address string) err
 		err = sender.
 			Table("satellites").
 			Symbol("satellite_name", data.Title).
-			Int64Column("satellite_id", int64(data.SatelliteID)).											// QUESTION: Why is ID not a symbol when name is?
+			Int64Column("satellite_id", int64(data.SatelliteID)). // QUESTION: Why is ID not a symbol when name is?
 			Int64Column("time_index", int64(data.Index)).
 			Float64Column("XPos", data.Position.X).
 			Float64Column("YPos", data.Position.Y).
@@ -113,7 +113,7 @@ func WriteWorker(lineData <-chan SatelliteLineData, database_address string) err
 			Float64Column("ZVel", data.Velocity.Z).
 			Float64Column("Latitude", data.LatLong.Latitude).
 			Float64Column("Longitude", data.LatLong.Longitude).
-			At(context.Background(), data.Timestamp)																	// finalizes the ILP message
+			At(context.Background(), data.Timestamp) // finalizes the ILP message
 		if err != nil {
 			log.Println(err)
 		}
@@ -130,7 +130,7 @@ func WriteWorker(lineData <-chan SatelliteLineData, database_address string) err
 // Takes as input: the satellite positions over time (retrieved from "satellite_positions.py")
 // the positions (LatLong in radians) are used to calculate the LatLong in degrees.
 // Outputs: All satellites with their information are stored as OrbitalData instances in a slice
-func LoadSatellitePositions(fileName string) []space.OrbitalData {
+func LoadSatellitePositions(fileName string, constellation string) []space.OrbitalData {
 
 	log.Printf("opening file\n")
 	fr, err := local.NewLocalFileReader(fileName)
@@ -140,7 +140,7 @@ func LoadSatellitePositions(fileName string) []space.OrbitalData {
 	defer fr.Close()
 
 	log.Printf("opening reader")
-	pr, err := reader.NewParquetReader(fr, new(FlatSatelliteLineDataIsrael), 4)		// <= QUESTION: what does the last parameter do?
+	pr, err := reader.NewParquetReader(fr, new(FlatSatelliteLineDataIsrael), 4) // <= QUESTION: what does the last parameter do?
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -150,11 +150,22 @@ func LoadSatellitePositions(fileName string) []space.OrbitalData {
 	log.Printf("reading row count")
 	row_count := pr.GetNumRows()
 	log.Printf("%d\n", row_count)
-	const NumberOfSatellites = 648																								// TODO: Remove hard coded simulation parameters
-	const SatelliteTimeSteps = 1000																								// TODO: Remove hard coded simulation parameters
+
+	NumberOfSatellites := 0
+
+	if constellation == "Kepler" {
+		NumberOfSatellites = 140
+	} else if constellation == "OneWeb" {
+		NumberOfSatellites = 648
+	} else if constellation == "Starlink" {
+		NumberOfSatellites = 1584
+	} else {
+		log.Fatal("constellation was not correctly specified", constellation)
+	}
+	const SatelliteTimeSteps = 1000 // TODO: Remove hard coded simulation parameters
 
 	expected_row_count := NumberOfSatellites * SatelliteTimeSteps
-	if int(row_count) != expected_row_count {																			// TODO: Make a check that not only compares length but checks if entries are empty
+	if int(row_count) != expected_row_count { // TODO: Make a check that not only compares length but checks if entries are empty
 		log.Fatal("parquet file length does not match number of expected elements", row_count)
 	}
 
@@ -167,7 +178,7 @@ func LoadSatellitePositions(fileName string) []space.OrbitalData {
 		orbitalData := space.OrbitalData{
 			Isactive:    true,
 			SatelliteId: sid,
-			Title:       strconv.Itoa(sid),																						// int to string
+			Title:       strconv.Itoa(sid), // int to string
 			Position:    make([]space.Vector3, SatelliteTimeSteps),
 			Velocity:    make([]space.Vector3, SatelliteTimeSteps),
 			LatLong:     make([]space.LatLong, SatelliteTimeSteps),
@@ -195,7 +206,7 @@ func LoadSatellitePositions(fileName string) []space.OrbitalData {
 			position := space.Vector3{X: *line.PosX / 1000, Y: *line.PosY / 1000, Z: *line.PosZ / 1000}
 			satdata[satellite_index].Position[timeindex] = position
 			// input: earth-centered intertial LatLong coordinates in radians | returns LatLong coordinates in degrees
-			satdata[satellite_index].LatLong[timeindex] = space.LLAFromPosition(position, tstart)		// <= QUESTION: Have I understood this correctly?
+			satdata[satellite_index].LatLong[timeindex] = space.LLAFromPosition(position, tstart) // <= QUESTION: Have I understood this correctly?
 		}
 		tstart = tstart.Add(15 * time.Second)
 	}
