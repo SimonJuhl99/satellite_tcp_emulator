@@ -130,7 +130,7 @@ func WriteWorker(lineData <-chan SatelliteLineData, database_address string) err
 // Takes as input: the satellite positions over time (retrieved from "satellite_positions.py")
 // the positions (LatLong in radians) are used to calculate the LatLong in degrees.
 // Outputs: All satellites with their information are stored as OrbitalData instances in a slice
-func LoadSatellitePositions(fileName string, constellation string) []space.OrbitalData {
+func LoadSatellitePositions(fileName string, constellation string, startTime time.Time, timestep time.Duration) []space.OrbitalData {
 
 	log.Printf("opening file\n")
 	fr, err := local.NewLocalFileReader(fileName)
@@ -185,7 +185,8 @@ func LoadSatellitePositions(fileName string, constellation string) []space.Orbit
 		}
 		satdata[sid] = orbitalData
 	}
-	tstart := time.Date(2023, 5, 9, 12, 0, 0, 0, time.UTC)
+	//tstart := time.Date(2023, 5, 9, 12, 0, 0, 0, time.UTC) 						// TODO: figure out if it was on purpose that this time and date did not match the time specified in main.go
+	tstart := startTime
 
 	for timeindex := 0; timeindex < SatelliteTimeSteps; timeindex++ {
 
@@ -206,9 +207,9 @@ func LoadSatellitePositions(fileName string, constellation string) []space.Orbit
 			position := space.Vector3{X: *line.PosX / 1000, Y: *line.PosY / 1000, Z: *line.PosZ / 1000}
 			satdata[satellite_index].Position[timeindex] = position
 			// input: earth-centered intertial LatLong coordinates in radians | returns LatLong coordinates in degrees
-			satdata[satellite_index].LatLong[timeindex] = space.LLAFromPosition(position, tstart) // <= QUESTION: Have I understood this correctly?
+			satdata[satellite_index].LatLong[timeindex] = space.LLAFromPosition(position, tstart)
 		}
-		tstart = tstart.Add(15 * time.Second)
+		tstart = tstart.Add(timestep)
 	}
 
 	return satdata

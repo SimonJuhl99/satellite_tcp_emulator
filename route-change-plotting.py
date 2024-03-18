@@ -1,10 +1,12 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-file1 = open("/tmp/route-changes-kepler", "r")
-file2 = open("/tmp/route-changes-oneweb", "r")
-file3 = open("/tmp/route-changes-starlink", "r")
-file_arr = [file1, file2, file3]
+#file1 = open("/tmp/route-changes-kepler", "r")
+#file2 = open("/tmp/route-changes-oneweb", "r")
+#file3 = open("/tmp/route-changes-starlink", "r")
+#file_arr = [file1, file2, file3]
+
+cost_file2 = open("/tmp/route-cost-oneweb", "r")
 
 
 def loadFile(files):
@@ -97,8 +99,36 @@ def makeChangeFreqPlot(route_change_times, mode):
                     ha='center', va='bottom')
     plt.show()
 
+
+def loadCostFile(file):
+    values = []
+    str_values = []
+
+    content=file.readlines()
+    content.pop(0)              # do not include the first time a route is found
+
+    for line in content:
+        line_values = []
+        spl = line.split()
+        for idx, word in enumerate(spl):
+            if word == "Cost:":    
+                cost_start_idx = int(idx+1)
+                for cost_idx in range(cost_start_idx, len(spl)):
+                    line_values.append(int(spl[cost_idx]))
+                values.append(line_values)
+                print(line_values)
+                break
+
+    # TODO: MOVE ALL IDX=0 VALUES INTO ONE LIST, ALL IDX=1 INTO ANOTHER AND SO ON...  
+    
+
+    file.close()
+
+
 if __name__ == '__main__':
-    route_change_times, str_route_change_times = loadFile(file_arr)
-    makeTimelinePlot(route_change_times, str_route_change_times)
-    makeChangeFreqPlot(route_change_times, "change_interval")
-    makeChangeFreqPlot(route_change_times, "change_number")
+    #route_change_times, str_route_change_times = loadFile(file_arr)
+    #makeTimelinePlot(route_change_times, str_route_change_times)
+    #makeChangeFreqPlot(route_change_times, "change_interval")
+    #makeChangeFreqPlot(route_change_times, "change_number")
+    loadCostFile(cost_file2)
+

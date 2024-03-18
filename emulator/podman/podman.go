@@ -28,8 +28,12 @@ var (
 	//SatelliteRawImage = "registry.hub.docker.com/mulvadt/satellite:latest"
 	SatelliteRawImage = "docker.io/mulvadt/satellite:latest"
 	//GroundStationRawImage = "registry.hub.docker.com/mulvadt/groundstation:latest"
-	GroundStationRawImage = "docker.io/mulvadt/groundstation:latest"
+	//GroundStationRawImage = "docker.io/mulvadt/groundstation:latest"
+	//GroundStationRawImage = "docker.io/sjuhl1/groundstation:latest"
+	GroundStationRawImage = "docker.io/sjuhl1/groundstation:1.0"
+	//GroundStationRawImage = "localhost/gs:latest"
 	// rawImage = "localhost/satellite"
+
 )
 
 func InitPodman() {

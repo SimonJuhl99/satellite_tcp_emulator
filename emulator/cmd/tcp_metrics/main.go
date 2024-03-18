@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"log"
 	"os"
 	"os/exec"
@@ -224,8 +225,15 @@ func main() {
 	// }
 	// defer tcpdataFile.Sync()
 	// defer tcpdataFile.Close()
+	terminateAfterSeconds := flag.Int("t", 10, "Number of seconds to run the code | Type:int")
+	flag.Parse()
+	terminateAfterNanoseconds := *terminateAfterSeconds * 1000000000
+
+	log.Println("Terminating after " + strconv.Itoa(*terminateAfterSeconds) + " seconds")
+	log.Println("Change time until termination using -t flag")
+
 	var err error
-	fw, err := local.NewLocalFileWriter("tcp_statistics" + time.Now().Format(time.Kitchen))
+	fw, err := local.NewLocalFileWriter("tcp_statistics" + time.Now().Format(time.Kitchen) + ".parquet")
 	if err != nil {
 		log.Fatal("Can't create local file", err)
 		return
@@ -247,6 +255,7 @@ func main() {
 			log.Println("WriteStop error", err)
 			return
 		}
+
 		fw.Close()
 	}
 	defer Stop()
@@ -263,7 +272,10 @@ func main() {
 	var prevStats SocketStatsTCP = SocketStatsTCP{}
 	// log.Println(cmd.Path, cmd.Args)
 	// TODO proper sleep
-	for counter := 0; counter < 20000; counter++ {
+
+	startTime := time.Now()
+
+	for counter := 0; counter < 200000; counter++ {
 		select {
 		case stopsignal := <-interruptSignal:
 			log.Println(stopsignal)
@@ -310,6 +322,10 @@ func main() {
 				pw.Flush(true)
 			}
 		}
+		if (time.Now().UnixNano() - startTime.UnixNano()) > (int64)(terminateAfterNanoseconds-50000000) { // subtracting 50ms since we do not want to surpass the specified time
+			return
+		}
+
 		time.Sleep(50 * time.Millisecond)
 	}
 

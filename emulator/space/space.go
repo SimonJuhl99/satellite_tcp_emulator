@@ -102,7 +102,6 @@ type OrbitalData struct {
 	//Time_steps []time.Time
 }
 
-
 // for each satellite, calculate positions for duration of simulation
 func getSatPos(sat_channel <-chan satellite, satData chan<- OrbitalData, startTime time.Time, timestep time.Duration, duration time.Duration) {
 	for sat := range sat_channel {
@@ -116,13 +115,13 @@ func getSatPos(sat_channel <-chan satellite, satData chan<- OrbitalData, startTi
 			// calculate position and velocity vectors of satellite for a given time
 			pos, vel := gosat.Propagate(sat.gosat, localStartTime.Year(), int(localStartTime.Month()), localStartTime.Day(), localStartTime.Hour(), localStartTime.Minute(), localStartTime.Second())
 
-			// jday := gosat.JDay(localStartTime.Year(), int(localStartTime.Month()), localStartTime.Day(), localStartTime.Hour(), localStartTime.Minute(), localStartTime.Second())
-			// gmst := gosat.ThetaG_JD(jday)
+			//jday := gosat.JDay(localStartTime.Year(), int(localStartTime.Month()), localStartTime.Day(), localStartTime.Hour(), localStartTime.Minute(), localStartTime.Second())
+			//gmst := gosat.ThetaG_JD(jday)
 
-			// convert the current time to Galileo system time (GST)
 			gst := gosat.GSTimeFromDate(localStartTime.Year(), int(localStartTime.Month()), localStartTime.Day(), localStartTime.Hour(), localStartTime.Minute(), localStartTime.Second())
 
 			_, _, ll := gosat.ECIToLLA(pos, gst)
+			//_, _, ll := gosat.ECIToLLA(pos, gmst)
 
 			ll_deg := gosat.LatLongDeg(ll)
 			// altitude, velocity, ll := gosat.ECIToLLA(pos, gst)

@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	gosgp4 "github.com/SharkEzz/go-sgp4"
 	gosat "github.com/joshuaferrara/go-satellite"
+	"github.com/rs/zerolog/log"
 )
 
 type LatLong struct {
@@ -45,7 +47,9 @@ func CalculateDistance(latlong1 LatLong, latlong2 LatLong, max_distance float64)
 	//a := math.Sin(lat_d/2)*math.Sin(lat_d/2) + math.Cos(lat1_r) * math.Cos(lat2_r) * math.Sin(long_d/2) * math.Sin(long_d/2)
 	//c := 2*math.Atan2(math.Sqrt(a),math.Sqrt(1-a))
 
+	// angular distance
 	c := 2 * math.Asin(math.Sqrt(math.Sin(lat_d/2)*math.Sin(lat_d/2)+math.Cos(lat1_r)*math.Cos(lat2_r)*math.Sin(long_d/2)*math.Sin(long_d/2)))
+	// distance between two points on earth
 	d = R * c
 	if d > max_distance {
 		inCircle = false
@@ -141,14 +145,18 @@ func LoadGroundStations(path string) ([]GroundStation, error) {
 	return groundStations, nil
 }
 
+// https://courses.ansys.com/index.php/courses/introduction-to-orbital-elements/lessons/coordinate-frames-epoch-lesson-3/
 func GroundStationECIPostions(gs GroundStation, startTime time.Time, timestep time.Duration, duration time.Duration) []Vector3 {
 	var altitude float64 = 0
 	var endTime time.Time = startTime // don't touch this
 	endTime = endTime.Add(duration)
 	var positions []Vector3
 	for i := 0; startTime.Before(endTime); i++ {
+		tempLatLong := LatLong{gs.Latlong.Latitude * math.Pi / 180, gs.Latlong.Longitude * math.Pi / 180}
 		jday := gosat.JDay(startTime.Year(), int(startTime.Month()), startTime.Day(), startTime.Hour(), startTime.Minute(), startTime.Second())
-		position := gosat.LLAToECI(gs.Latlong.asGosatLatLone(), float64(altitude), jday)
+		//gst := gosat.GSTimeFromDate(startTime.Year(), int(startTime.Month()), startTime.Day(), startTime.Hour(), startTime.Minute(), startTime.Second())
+		//position := gosat.LLAToECI(gs.Latlong.asGosatLatLone(), float64(altitude), gst)
+		position := gosat.LLAToECI(tempLatLong.asGosatLatLone(), float64(altitude), jday)
 		startTime = startTime.Add(timestep)
 		newPos := Vector3{
 			X: position.X,
@@ -158,4 +166,46 @@ func GroundStationECIPostions(gs GroundStation, startTime time.Time, timestep ti
 		positions = append(positions, newPos)
 	}
 	return positions
+}
+
+// only for testing
+func GroundStationECIToLLAPostions(gs GroundStation, eciCoords []Vector3, startTime time.Time, timestep time.Duration, duration time.Duration) []Vector3 {
+	for i := 0; i <= 5; i++ {
+		jday := gosat.JDay(startTime.Year(), int(startTime.Month()), startTime.Day(), startTime.Hour(), startTime.Minute(), startTime.Second())
+		//gst := gosat.GSTimeFromDate(startTime.Year(), int(startTime.Month()), startTime.Day(), startTime.Hour(), startTime.Minute(), startTime.Second())
+		gmst := gosat.ThetaG_JD(jday)
+		_, _, ll := gosat.ECIToLLA(eciCoords[i].AsgosatVector(), gmst)
+		tempLatLong := LatLong{ll.Latitude / (math.Pi / 180), ll.Longitude / (math.Pi / 180)}
+		log.Info().Interface("LatLong2", tempLatLong).Msg("------------------------------------------------>")
+		//position := gosat.LLAToECI(gs.Latlong.asGosatLatLone(), float64(altitude), gst)
+		startTime = startTime.Add(timestep)
+	}
+	return nil
+}
+
+// only for testing
+func GroundStationPositionTest(gs GroundStation, startTime time.Time) {
+
+	jday := gosat.JDay(startTime.Year(), int(startTime.Month()), startTime.Day(), startTime.Hour(), startTime.Minute(), startTime.Second())
+	tempLatLong := LatLong{gs.Latlong.Latitude * math.Pi / 180, gs.Latlong.Longitude * math.Pi / 180}
+
+	goecoord, _ := gosgp4.NewCoordGeodetic(gs.Latlong.Latitude, gs.Latlong.Longitude, 0.0, false)
+	a, b, c, _ := goecoord.GetCoords(true)
+	log.Info().Float64("yeeees", a).Msg("------------------------------------------------>")
+	log.Info().Float64("yeeees", b).Msg("------------------------------------------------>")
+	log.Info().Float64("yeeees", c).Msg("------------------------------------------------>")
+	dt, _ := gosgp4.NewDateTimeFromTime(startTime)
+	eci, _ := gosgp4.NewEci(dt, goecoord)
+	log.Info().Interface("yeeees2", eci).Msg("------------------------------------------------>")
+
+	position := gosat.LLAToECI(tempLatLong.asGosatLatLone(), 0.0, jday)
+
+	gmst := gosat.ThetaG_JD(jday)
+	_, _, ll := gosat.ECIToLLA(position, gmst)
+	temp2latlong := LatLong{ll.Latitude / (math.Pi / 180), ll.Longitude / (math.Pi / 180)}
+	log.Info().Interface("LatLong1", gs.Latlong).Msg("------------------------------------------------>")
+	log.Info().Interface("LatLong1", tempLatLong).Msg("------------------------------------------------>")
+	log.Info().Interface("Position", position).Msg("------------------------------------------------>")
+	log.Info().Interface("LatLong2", ll).Msg("------------------------------------------------>")
+	log.Info().Interface("LatLong2", temp2latlong).Msg("------------------------------------------------>")
 }

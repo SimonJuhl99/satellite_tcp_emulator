@@ -60,7 +60,7 @@ func SetupLogger() *os.File {
 }
 
 func main() {
-	constellation_name := "Starlink"
+	constellation_name := "OneWeb"
 
 	tempFile := SetupLogger()
 	defer tempFile.Sync()
@@ -89,11 +89,11 @@ func main() {
 	timeStep := 1 * time.Second
 	duration := endTime.Sub(startTime)
 	// retrieve data generated in satellite_positions.py (based on Israels simulation)
-	var satellite_positions_path string = "./constellation-starlink-delta1.parquet"
+	var satellite_positions_path string = "./constellation-" + strings.ToLower(constellation_name) + "-delta1.parquet"
 	if strings.ToLower(os.Getenv("ISRAEL")) == "true" {
 		log.Info().Msg("using simulated constellation")
 		// returns slice of OrbitalData structs, each struct containing positions (LatLong in degrees) for one satellite over time
-		satdata = database.LoadSatellitePositions(satellite_positions_path, constellation_name)
+		satdata = database.LoadSatellitePositions(satellite_positions_path, constellation_name, startTime, timeStep)
 		graphSize += len(satdata)
 		for _, orbitialData := range satdata {
 			SatelliteIds = append(SatelliteIds, orbitialData.SatelliteId)
@@ -118,10 +118,18 @@ func main() {
 
 	sort.Ints(SatelliteIds) //satdata is sorted in GetSatData. SatelliteIds must be sorted to be used as common indexing
 
-	// for _, gs := range GroundStations {
-	// 	gs_positions := groundstation.GroundStationECIPostions(gs, startTime, timeStep, duration)
-	// 	gs.Position = gs_positions
-	// } // Currently Unused
+	space.GroundStationPositionTest(GroundStations[0], startTime)
+	space.GroundStationPositionTest(GroundStations[2], startTime)
+
+	for i, gs := range GroundStations {
+		gs_positions := space.GroundStationECIPostions(gs, startTime, timeStep, duration)
+		GroundStations[i].Position = gs_positions
+	}
+
+	log.Info().Interface("LatLong1", GroundStations[2].Latlong).Msg("------------------------------------------------>")
+	space.GroundStationECIToLLAPostions(GroundStations[2], GroundStations[2].Position, startTime, timeStep, duration)
+
+	//log.Info().Interface("GS Positions", GroundStations[0].Position).Msg("YYYYYYYYYYYYYYYA")
 
 	if os.Getenv("LOG_DATA") == "TRUE" {
 		var location string = "parquet" // TODO: remove hard coding
@@ -266,13 +274,13 @@ func main() {
 	simulationStart := time.Now()
 	log.Info().Time("simulationStart", simulationStart).Msg("starting simulation")
 
-	f, err := os.Create("/tmp/route-changes")
+	f, err := os.Create("/tmp/route-changes-" + strings.ToLower(constellation_name))
 	if err != nil {
 		log.Error().Err(err).Msg("Error in creating route change file")
 	}
 	defer f.Close()
 
-	route_cost_f, err := os.Create("/tmp/route-cost")
+	route_cost_f, err := os.Create("/tmp/route-cost-" + strings.ToLower(constellation_name))
 	if err != nil {
 		log.Error().Err(err).Msg("Error in creating route cost file")
 	}
@@ -441,19 +449,21 @@ func main() {
 				}
 			}
 			*/
-			//var gs_name string
-			//var gs_satellite space.OrbitalData
+			// var gs_name string
+			// var gs_satellite space.OrbitalData
 
-			//gs_name = GroundStations[path[1]-len(SatelliteIds)].Title
-			//gs_satellite = satdata[path[2]]
-			//podman.RunCommand("GS"+GroundStations[path[1]-len(SatelliteIds)].Title, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-			//podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+			// gs_name = GroundStations[path[1]-len(SatelliteIds)].Title
+			// gs_satellite = satdata[path[2]]
 
-			//gs_name = GroundStations[path[len(path)-(2-1)]-len(SatelliteIds)].Title
-			//gs_satellite = satdata[path[3-1]]
-			//podman.RunCommand("GS"+GroundStations[path[len(path)-(2-1)]-len(SatelliteIds)].Title, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-			//podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
-			//wg.Wait()
+			// podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
+			// podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+
+			// gs_name = GroundStations[path[len(path)-2]-len(SatelliteIds)].Title
+			// gs_satellite = satdata[path[len(path)-3]]
+
+			// podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
+			// podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+			// wg.Wait()
 
 			// Setting up the routing table for all containers
 			log.Info().Interface("path", path).Msg("debug path")
@@ -499,27 +509,56 @@ func main() {
 		//* TC command update *//
 
 		simulationTime := index
+		//var cost_string string = "Time: " + strconv.Itoa(simulationTime) + " - Cost: "
+		//var cost_string string
+		var cost_string strings.Builder
+		cost_string.WriteString("Time: " + strconv.Itoa(simulationTime) + " - Cost: ")
+
+		var fromPos space.Vector3
+		var toPos space.Vector3
+		var fromName string
+		var toName string
 		wg := sync.WaitGroup{}
 		for pathindex := 0; pathindex < len(path)-1; pathindex++ {
-
 			graphid_1 := path[pathindex]
 			graphid_2 := path[pathindex+1]
-			if graphid_1 >= len(satdata) || graphid_2 >= len(satdata) {
+
+			if graphid_1 >= len(satdata) && graphid_2 >= len(satdata) { // if both are groundstations
 				continue
+			} else if graphid_1 < len(satdata) && graphid_2 < len(satdata) { // if both are satellites
+				fromPos = satdata[graphid_1].Position[simulationTime]
+				toPos = satdata[graphid_2].Position[simulationTime]
+				fromName = "Sat" + strconv.Itoa(satdata[graphid_1].SatelliteId)
+				toName = "Sat" + strconv.Itoa(satdata[graphid_2].SatelliteId)
+			} else if graphid_1 >= len(satdata) { // if only the first is a groundstation
+				fromPos = GroundStations[graphid_1-len(SatelliteIds)].Position[simulationTime]
+				toPos = satdata[graphid_2].Position[simulationTime]
+				fromName = "GS" + GroundStations[graphid_1-len(SatelliteIds)].Title
+				toName = "Sat" + strconv.Itoa(satdata[graphid_2].SatelliteId)
+				log.Info().Float64("Distance ", fromPos.Distance(toPos)).Msg("==========> " + fromName + "-" + toName + " ===>")
+			} else if graphid_2 >= len(satdata) { // if only the second is a groundstation
+				fromPos = satdata[graphid_1].Position[simulationTime]
+				toPos = GroundStations[graphid_2-len(SatelliteIds)].Position[simulationTime]
+				fromName = "Sat" + strconv.Itoa(satdata[graphid_1].SatelliteId)
+				toName = "GS" + GroundStations[graphid_2-len(SatelliteIds)].Title
+				log.Info().Float64("Distance ", fromPos.Distance(toPos)).Msg("==========> " + fromName + "-" + toName + " ===>")
 			}
-			satFrom := satdata[graphid_1]
-			satTo := satdata[graphid_2]
 
 			//route_cost := 0
-			if space.Reachable(satFrom.Position[simulationTime], satTo.Position[simulationTime], maxFSODistance) {
+			if space.Reachable(fromPos, toPos, maxFSODistance) {
 				wg.Add(1)
-				go func(simulationTime int, satFrom, satTo space.OrbitalData) {
+				//go func(simulationTime int, satFrom, satTo space.OrbitalData) {
+				go func(simulationTime int, fromPos, toPos space.Vector3, fromName, toName string) {
 					defer wg.Done()
-					distance := satFrom.Position[simulationTime].Distance(satTo.Position[simulationTime])
+					distance := fromPos.Distance(toPos)
 					latency_ms := space.Latency(distance) * 1000
 					// Performs a nearly atomic remove/add on an existing node id. If the node does not exist yet it is created.
 					cost := int(math.Ceil(latency_ms))
-					log.Info().Int("cost", cost).Msg("=>") // LOG THIS
+
+					cost_string.WriteString(strconv.Itoa(cost) + " ")
+					log.Info().Float64("Distance ", fromPos.Distance(toPos)).Msg("==========> " + fromName + "-" + toName + " ===>")
+
+					//log.Info().Int("cost", cost).Msg("====== " + fromName + "-" + toName + " =====> ") // LOG THIS
 					//route_cost += cost
 					/*rorc
 					command_forward := qdiscCommand("Sat", satTo.SatelliteId, cost)
@@ -528,43 +567,43 @@ func main() {
 					command_reverse := qdiscCommand("Sat", satFrom.SatelliteId, cost)
 					container_name_reverse := fmt.Sprintf("Sat%d", satTo.SatelliteId)
 					podman.RunCommand(container_name_reverse, command_reverse)*/
-				}(simulationTime, satFrom, satTo)
+				}(simulationTime, fromPos, toPos, fromName, toName)
 			}
-			/*var pathInfo string = "Route cost: " + strconv.Itoa(route_cost) + "ms\tat time " + strconv.Itoa(index) + "\n"
-			_, err := route_cost_f.WriteString(pathInfo)
-			if err != nil {
-				log.Error().Err(err).Msg("Error writing new path to file")
-			}
-			route_cost_f.Sync()*/
 		}
 
-		var gs_name string
-		var gs_satellite space.OrbitalData
+		// var gs_name string
+		// var gs_satellite space.OrbitalData
 
-		gs_name = GroundStations[path[1]-len(SatelliteIds)].Title
-		gs_satellite = satdata[path[2]]
-		log.Info().Msg("GS1 NAME ===========================> " + gs_name)
-		log.Info().Msg("GS1 SAT  ===========================> " + strconv.Itoa(gs_satellite.SatelliteId))
-		// podman.RunCommand("GS"+GroundStations[path[1]-len(SatelliteIds)].Title, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
+		// gs_name = GroundStations[path[1]-len(SatelliteIds)].Title
+		// gs_satellite = satdata[path[2]]
+
+		// podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
 		// podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
 
-		gs_name = GroundStations[path[len(path)-(2-1)]-len(SatelliteIds)].Title
-		gs_satellite = satdata[path[3-1]]
-		log.Info().Msg("GS2 NAME ===========================> " + gs_name)
-		log.Info().Msg("GS2 SAT  ===========================> " + strconv.Itoa(gs_satellite.SatelliteId))
-		// podman.RunCommand("GS"+GroundStations[path[len(path)-(2-1)]-len(SatelliteIds)].Title, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
+		// gs_name = GroundStations[path[len(path)-2]-len(SatelliteIds)].Title
+		// gs_satellite = satdata[path[len(path)-3]]
+
+		// podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
 		// podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
-		// wg.Wait()
+		wg.Wait()
+
+		log.Info().Msg(cost_string.String())
+		cost_string.WriteString("\n")
+		_, err = route_cost_f.WriteString(cost_string.String())
+		if err != nil {
+			log.Error().Err(err).Msg("Error writing new path to file")
+		}
+		route_cost_f.Sync()
 
 		//Wait until next iteration based on time.
 
-		simulationstartCopy := simulationStart
+		/*simulationstartCopy := simulationStart
 		targetTime := simulationstartCopy.Add(time.Duration(index * int(timeStep)))
 		tooSlow := time.Now().After(targetTime)
 		if tooSlow {
 			log.Warn().Bool("computerIsPotato", tooSlow).Time("targetTime", targetTime).Dur("duration", time.Since(targetTime)).Msg("simulation not running in real time")
 		}
-		time.Sleep(time.Until((targetTime)))
+		time.Sleep(time.Until((targetTime)))*/
 
 	}
 }

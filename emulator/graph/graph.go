@@ -78,6 +78,11 @@ func SetupGraphGroundStationEdges(g *graph.Mutable, index int, simulationTime ti
 			continue
 		}
 		for node1, sat := range satdata {
+			/* this only works if gs ECI positions are calculated:
+			ddistance := gs.Position[index].Distance(sat.Position[index])
+			if ddistance <= 1500 {
+				log.Debug().Int("gsid", gsid).Int("satid", sat.SatelliteId).Float64("distance", ddistance).Msg("????? => Interesting ====>")
+			}*/
 			visible, distance := space.SatelliteVisible(&gs, sat.LatLong[index])
 			if visible {
 				log.Debug().Bool("visible", visible).Float64("distance", distance).Msg("satellite visibility")
