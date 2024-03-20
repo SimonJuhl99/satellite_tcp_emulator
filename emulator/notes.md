@@ -28,6 +28,7 @@ Create new docker image `https://stackoverflow.com/questions/52415858/updating-a
 Make statically linked binary of tcp_metrics: `CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo ./cmd/tcp_metrics/main.go`
 ^ On dockerizing an application: `https://www.cloudbees.com/blog/building-minimal-docker-containers-for-go-applications#part-2-dockerize`
 
+Build groundstation image from Dockerfile including the tcp_metrics binary which is in the same directory `docker build -t groundstation:1.0 ~/Documents/repositories/P8-project/satellite_tcp_emulator/`
 
 # Push new image to docker hub
 

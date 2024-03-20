@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -82,7 +83,10 @@ func preprocessRaw(input string) string {
 	text = strings.Replace(text, "send ", "send:", 1)
 	text = strings.Replace(text, "pacing_rate ", "pacing_rate:", 1)
 	text = strings.Replace(text, "delivery_rate ", "delivery_rate:", 1)
-	// text = strings.Replace(text, "delivery_rate ", "delivery_rate:", 1)
+	re := regexp.MustCompile(` rwnd_limited[:0-9ms(.%)]*`)
+	text = re.ReplaceAllString(text, "")
+	re = regexp.MustCompile(` sndbuf_limited[:0-9ms(.%)]*`)
+	text = re.ReplaceAllString(text, "")
 	return text
 }
 
@@ -290,13 +294,15 @@ func main() {
 			log.Fatal(err)
 		}
 
+		// all output from ss command
 		text := string(output)
-		// log.Print(text)
+		// split output from each connection into their own elements in slice
 		lines := strings.Split(text, "\n")
 		for id, line := range lines {
 			if len(line) == 0 {
 				continue
 			}
+			//
 			text := preprocessRaw(line)
 			// text = strings.TrimRight(text, "\n ") // Trim newline and trailing whitespace
 			columns := strings.Split(text, " ")
@@ -305,6 +311,7 @@ func main() {
 				log.Println(line)
 				continue
 			}
+			// remove first 5 elements in columns slice
 			stats, err := parseStats(columns[5:])
 			if err != nil {
 				log.Fatalf("failed to parse stats:\n line:%s\ntext:%s\ncolumns:%v\n,stats%v", line, text, columns[5:], stats)
