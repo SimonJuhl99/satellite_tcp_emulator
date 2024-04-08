@@ -23,6 +23,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const printOn bool = false
+
 var (
 	ctx context.Context
 	//SatelliteRawImage = "registry.hub.docker.com/mulvadt/satellite:latest"
@@ -199,7 +201,9 @@ func TearDownLink(linkDetails LinkDetails) {
 		log.Error().Err(err).Msg("Failed to remove network")
 		return
 	}
-	log.Debug().Interface("report", report).Msg("Removed Network")
+	if printOn {
+		log.Debug().Interface("report", report).Msg("Removed Network")
+	}
 }
 
 func connectContainerToNetwork(cnname string, cip string, cid string, ifname string) {

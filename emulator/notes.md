@@ -49,3 +49,9 @@ Example : `podman tag groundstation:latest sjuhl1/groundstation`
 General : `podman push username/dockerrepo`
 Example : `podman push sjuhl1/groundstation`
 
+# Error messages and fixes
+
+* `2024/03/28 09:38:45 rtt106 1unsupproted kv int slash pair`
+
+* If unable to access register: `sudo sysctl -w net.ipv4.tcp_mtu_probing=1` 
+

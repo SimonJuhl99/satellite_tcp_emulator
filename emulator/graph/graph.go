@@ -15,6 +15,8 @@ import (
 //)
 // const hopPenalty float32 =
 
+const printOn bool = false
+
 func InstantiateGraph(vertices int) (g *graph.Mutable) {
 	g = graph.New(vertices)
 	return g
@@ -84,7 +86,7 @@ func SetupGraphGroundStationEdges(g *graph.Mutable, index int, simulationTime ti
 				log.Debug().Int("gsid", gsid).Int("satid", sat.SatelliteId).Float64("distance", ddistance).Msg("????? => Interesting ====>")
 			}*/
 			visible, distance := space.SatelliteVisible(&gs, sat.LatLong[index])
-			if visible {
+			if visible && printOn {
 				log.Debug().Bool("visible", visible).Float64("distance", distance).Msg("satellite visibility")
 			}
 			if !visible || distance > 1500 {
@@ -95,12 +97,16 @@ func SetupGraphGroundStationEdges(g *graph.Mutable, index int, simulationTime ti
 				continue
 			}
 			cost := space.Latency(float64(distance)) * 1000000
-			log.Debug().Int("gsid", gsid).Int("satid", sat.SatelliteId).Float64("distance", distance).Msg("new GS->Satellite")
+			if printOn {
+				log.Debug().Int("gsid", gsid).Int("satid", sat.SatelliteId).Float64("distance", distance).Msg("new GS->Satellite")
+			}
 			err := AddBothCost(g, len(gsdata)+len(satdata), len(satdata)+gsid, node1, int64(cost))
 			if err != nil {
 				log.Error().Err(err).Str("gsname", gs.Title).Msg("failed to add cost path to graph")
 			}
-			log.Info().Bool("visible", visible).Float64("distance", distance).Str("gsname", gs.Title).Msg("adding GS link")
+			if printOn {
+				log.Info().Bool("visible", visible).Float64("distance", distance).Str("gsname", gs.Title).Msg("adding GS link")
+			}
 		}
 	}
 }
@@ -120,7 +126,7 @@ func SetupGraphAccessPointEdges(g *graph.Mutable, graphSize int, gsdata []space.
 			}
 
 			visible, distance := space.AccessPointVisible(&gs1, &gs2, maxAPDistance) // QUESTION: to me it looks like u calculate the circle arc, but how does the work as a measure when u wanna figure out if the AP is visible?
-			if visible {
+			if visible && printOn {
 				log.Debug().Bool("visible", visible).Float64("distance", distance).Msg("Access Point In Range")
 			}
 
