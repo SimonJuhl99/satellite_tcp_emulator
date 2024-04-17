@@ -25,9 +25,11 @@ import (
 	"golang.org/x/exp/slices"
 )
 
-const testTCPversion string = "reno"
+const timeStepInt int = 30 // L2 timestep
+const timeStepL3 int = 15
+const testTCPversion string = "cubic"
 const printOn bool = false
-const noDrop bool = true
+const noDrop bool = false
 const maxFSODistance float64 = 3000
 const oneweb_altitude = 1200
 
@@ -86,14 +88,23 @@ func main() {
 	var graphSize int = len(GroundStations)
 	// var SatelliteIds []int
 
+	startIperfTime := 90
+	startTCPmetricsTime := 120
+	startIperfIndex := startIperfTime / timeStepInt
+	startTCPmetricsIndex := startTCPmetricsTime / timeStepInt
+
+	log.Info().Int("timeStepInt", timeStepInt).Msg("====================>")
+	log.Info().Int("startIperfIndex", startIperfIndex).Msg("====================>")
+	log.Info().Int("startTCPmetricsIndex", startTCPmetricsIndex).Msg("====================>")
+
 	// create slice of OrbitalData structs
 	var satdata []space.OrbitalData
 	startTime := time.Date(2022, 9, 11, 12, 00, 00, 00, time.UTC)
 	endTime := time.Date(2022, 9, 21, 22, 00, 00, 00, time.UTC)
-	timeStep := 15 * time.Second
+	timeStep := time.Duration(timeStepInt) * time.Second
 	duration := endTime.Sub(startTime)
 	// retrieve data generated in satellite_positions.py (based on Israels simulation)
-	var satellite_positions_path string = "./constellation.parquet"
+	var satellite_positions_path string = "./constellation-delta" + strconv.Itoa(timeStepInt) + ".parquet"
 	if strings.ToLower(os.Getenv("ISRAEL")) == "true" { // <= QUESTION: Do you have an environment variable set controlling this decision?
 		log.Info().Msg("using simulated constellation")
 		// returns slice of OrbitalData structs, each struct containing positions (LatLong in degrees) for one satellite over time
@@ -108,7 +119,7 @@ func main() {
 		var satellites []satellite.Satellite
 		var found bool
 		// Creates slice of satellite structs using "https://github.com/joshuaferrara/go-satellite"
-		SatelliteIds, satellites, found = tle.LoadSatellites("./OneWeb") // <= QUESTION: What are those informations in the file? And how does the satellite struct work?
+		SatelliteIds, satellites, found = tle.LoadSatellites("./OneWeb")
 		if !found {
 			log.Fatal().Int("satelliteCount", len(SatelliteIds)).Msg("Failed to load satellites")
 		}
@@ -264,7 +275,7 @@ func main() {
 	simulationStart := time.Now()
 	log.Info().Time("simulationStart", simulationStart).Msg("starting simulation")
 
-	f, err := os.Create("/tmp/route-changes-update-L3-every-" + strconv.Itoa(int(timeStep)/1000000000) + "-seconds") //+ strings.ToLower(constellation_name))
+	f, err := os.Create("/tmp/route-changes-update-L3-every-" + strconv.Itoa(int(timeStepL3)/1000000000) + "-seconds") //+ strings.ToLower(constellation_name))
 	if err != nil {
 		log.Error().Err(err).Msg("Error in creating route change file")
 	}
@@ -280,7 +291,7 @@ func main() {
 		default:
 		}
 
-		if index%2 == 0 {
+		if (index*timeStepInt)%timeStepL3 == 0 { // if L2 timestep is a multiple of L3 timestep
 			log.Info().Msg("\n\n======================================\nL3 UPDATE\n======================================\n")
 
 			newPath = false
@@ -294,6 +305,7 @@ func main() {
 			var earthTime time.Time = startTime
 			earthTime = earthTime.Add(time.Duration(index * int(timeStep)))
 			log.Info().Time("earthTime", earthTime).Int("index", index).Msg("earthTime")
+			log.Info().Msg("Time right now: " + strconv.Itoa((index-startTCPmetricsIndex)*int(timeStep)/1000000000))
 			// log.Debug().Time("time", earthTime).Interface("gs1", groundstations[0].Title).Interface("gs2", groundstations[0].Title).Msg("adding gs edges at earth time")
 
 			// create edge if a GS and satellite are within maxFSODistance (edge cost calculated from distance)
@@ -313,14 +325,15 @@ func main() {
 						for unit := 0; unit < len(nextPath); unit++ {
 							pathUnits += containers[nextPath[unit]] + " "
 						}
-						var pathInfo string = "Path change found at time " + strconv.Itoa(index) + "\t" + pathUnits + "\n"
+						var pathInfo string = "Path change found at time " + strconv.Itoa((index-startTCPmetricsIndex)*int(timeStep)/1000000000) + "\t" + pathUnits + "\n"
+						log.Info().Msg("Time of path change: " + strconv.Itoa((index-startTCPmetricsIndex)*int(timeStep)/1000000000))
 						_, err := f.WriteString(pathInfo)
 						if err != nil {
 							log.Error().Err(err).Msg("Error writing new path to file")
 						}
 						f.Sync()
 
-						log.Info().Int64("pathDistance", pathDistance).Int64("nextPathDistance", nextPathDistance).Msg("path change")
+						//log.Info().Int64("pathDistance", pathDistance).Int64("nextPathDistance", nextPathDistance).Msg("path change")
 						if noDrop {
 							prevPath = path
 						}
@@ -355,8 +368,8 @@ func main() {
 							prevSats = append(prevSats, prevPath[i])
 						}
 					}
-					log.Info().Ints("prevPath", prevPath).Int("time index", index).Msg("Previous path")
-					log.Info().Ints("prevSats", prevSats).Int("time index", index).Msg("Sats that are not part of new path")
+					//log.Info().Ints("prevPath", prevPath).Int("time index", index).Msg("Previous path")
+					//log.Info().Ints("prevSats", prevSats).Int("time index", index).Msg("Sats that are not part of new path")
 				}
 
 				// only set a satellite to be active if it is a part of the path
@@ -395,7 +408,7 @@ func main() {
 					// iplookup[path[i]] = linkDeatils.NodeOneIP
 					// iplookup[path[i+1]] = linkDeatils.NodeTwoIP
 				}
-				log.Info().Strs("nextlinks before prevpath", nextlinks).Msg("link for nextpath")
+				//log.Info().Strs("nextlinks before prevpath", nextlinks).Msg("link for nextpath")
 
 				// find links between prevSats and their previous neighbors, append the link names to nextlinks to avoid that these links are torn down
 				if noDrop {
@@ -416,7 +429,7 @@ func main() {
 							}
 						}
 					}
-					log.Info().Strs("nextlinks after prevpath", nextlinks).Msg("link for nextpath")
+					//log.Info().Strs("nextlinks after prevpath", nextlinks).Msg("link for nextpath")
 				}
 
 				// activelinks subtracted the links which also appear in nextlinks = links that need to be torn down
@@ -476,8 +489,8 @@ func main() {
 				// make path which enable satellties in prevSats to get remaining packets onto the main path
 				if noDrop {
 					lastJ := -1
-					log.Info().Interface("prevSats", prevSats).Msg("making prevSatsL2Path")
-					log.Info().Interface("prevPath", prevPath).Msg("making prevSatsL2Path")
+					//log.Info().Interface("prevSats", prevSats).Msg("making prevSatsL2Path")
+					//log.Info().Interface("prevPath", prevPath).Msg("making prevSatsL2Path")
 					for i := 0; i < len(prevSats); i++ {
 						for j := 0; j < len(prevPath); j++ {
 							// j will always be equal to 2 or larger
@@ -514,13 +527,21 @@ func main() {
 						} else if graphid_1 >= len(satdata) { // if first node is a gs
 							gs_name := GroundStations[graphid_1-len(satdata)].Title
 							gs_satellite := satdata[graphid_2]
-							podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-							podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+							wg.Add(1)
+							go func(simulationTime int, gs_name string, satTo space.OrbitalData) {
+								defer wg.Done()
+								podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
+								podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+							}(simulationTime, gs_name, gs_satellite)
 						} else if graphid_2 >= len(satdata) { // if last node is a gs
 							gs_name := GroundStations[graphid_2-len(satdata)].Title
 							gs_satellite := satdata[graphid_1]
-							podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-							podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+							wg.Add(1)
+							go func(simulationTime int, gs_name string, satTo space.OrbitalData) {
+								defer wg.Done()
+								podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
+								podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+							}(simulationTime, gs_name, gs_satellite)
 						} else { // if both nodes are sats
 							satFrom := satdata[graphid_1]
 							satTo := satdata[graphid_2]
@@ -572,46 +593,82 @@ func main() {
 				// output commands that will only allow packets to be routed AWAY from the old sats
 				commandsPrevsats, reversecommandsPrevsats := routing.RouteTablesPrevSats(path, prevSats, prevSatsL2Path)
 
+				wg.Wait()
+
+				// Apply netem to new links
+				//* TC command update *//
+
+				wg = sync.WaitGroup{}
+
 				if printOn {
 					log.Debug().Interface("forward_commands", commands).Msg("FORWARD Routing")
 				}
 				for container_id, command := range commands {
+					wg.Add(1)
 					if container_id < len(SatelliteIds) {
-						podman.RunCommand("Sat"+strconv.Itoa(SatelliteIds[container_id]), command)
+						go func(container_id int, command string) {
+							defer wg.Done()
+							podman.RunCommand("Sat"+strconv.Itoa(SatelliteIds[container_id]), command)
+						}(container_id, command)
 					} else {
-						podman.RunCommand("GS"+GroundStations[container_id-len(SatelliteIds)].Title, command)
+						go func(container_id int, command string) {
+							defer wg.Done()
+							podman.RunCommand("GS"+GroundStations[container_id-len(SatelliteIds)].Title, command)
+						}(container_id, command)
 					}
 				}
 				if printOn {
 					log.Debug().Interface("reverse_commands", reversecommands).Msg("REVERSE Routing")
 				}
 				for container_id, command := range reversecommands {
+					wg.Add(1)
 					if container_id < len(SatelliteIds) {
-						podman.RunCommand("Sat"+strconv.Itoa(SatelliteIds[container_id]), command)
+						go func(container_id int, command string) {
+							defer wg.Done()
+							podman.RunCommand("Sat"+strconv.Itoa(SatelliteIds[container_id]), command)
+						}(container_id, command)
 					} else {
-						podman.RunCommand("GS"+GroundStations[container_id-len(SatelliteIds)].Title, command)
+						go func(container_id int, command string) {
+							defer wg.Done()
+							podman.RunCommand("GS"+GroundStations[container_id-len(SatelliteIds)].Title, command)
+						}(container_id, command)
 					}
 				}
 				if printOn {
 					log.Debug().Interface("forward_commands", commandsPrevsats).Msg("FORWARD Routing")
 				}
 				for container_id, command := range commandsPrevsats {
+					wg.Add(1)
 					if container_id < len(SatelliteIds) {
-						podman.RunCommand("Sat"+strconv.Itoa(SatelliteIds[container_id]), command)
+						go func(container_id int, command string) {
+							defer wg.Done()
+							podman.RunCommand("Sat"+strconv.Itoa(SatelliteIds[container_id]), command)
+						}(container_id, command)
 					} else {
-						podman.RunCommand("GS"+GroundStations[container_id-len(SatelliteIds)].Title, command)
+						go func(container_id int, command string) {
+							defer wg.Done()
+							podman.RunCommand("GS"+GroundStations[container_id-len(SatelliteIds)].Title, command)
+						}(container_id, command)
 					}
 				}
 				if printOn {
 					log.Debug().Interface("reverse_commands", reversecommandsPrevsats).Msg("REVERSE Routing")
 				}
 				for container_id, command := range reversecommandsPrevsats {
+					wg.Add(1)
 					if container_id < len(SatelliteIds) {
-						podman.RunCommand("Sat"+strconv.Itoa(SatelliteIds[container_id]), command)
+						go func(container_id int, command string) {
+							defer wg.Done()
+							podman.RunCommand("Sat"+strconv.Itoa(SatelliteIds[container_id]), command)
+						}(container_id, command)
 					} else {
-						podman.RunCommand("GS"+GroundStations[container_id-len(SatelliteIds)].Title, command)
+						go func(container_id int, command string) {
+							defer wg.Done()
+							podman.RunCommand("GS"+GroundStations[container_id-len(SatelliteIds)].Title, command)
+						}(container_id, command)
 					}
 				}
+				wg.Wait()
 
 				for _, link := range linkStopList {
 					linkDetails := links[link]
@@ -620,6 +677,7 @@ func main() {
 					}
 					go podman.TearDownLink(linkDetails)
 				}
+
 				activelinks = nextlinks
 
 			} else {
@@ -712,13 +770,15 @@ func main() {
 		wg.Wait()
 
 		// start measuring tcp performance
-		if index == 6 {
+		if index == startIperfIndex {
 			startTesting1()
-		} else if index == 8 {
+			log.Info().Msg("Iperf started")
+		} else if index == startTCPmetricsIndex {
 			startTesting2()
-		} else if ((index - 8) * (int(timeStep) / 1000000000)) > 1000 { // divide by 10e9 as timestep is in nanoseconds
+			log.Info().Msg("TCP_metrics started")
+		} else if ((index - startTCPmetricsIndex) * (int(timeStep) / 1000000000)) > 1000 { // divide by 10e9 as timestep is in nanoseconds
 			log.Info().Msg("\n\n\n\n\tTEST OVER - 1000 SECONDS PASSED ")
-			log.Info().Int("seconds passed", (index-8)*int(timeStep))
+			log.Info().Int("seconds passed", (index-startTCPmetricsIndex)*int(timeStep)/1000000000).Msg("")
 			log.Info().Msg("\n\n\n\n")
 		}
 

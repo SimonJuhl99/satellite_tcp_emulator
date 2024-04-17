@@ -60,7 +60,7 @@ func SetupGraphSatelliteEdges(g *graph.Mutable, index int, satdata []space.Orbit
 			if space.Reachable(satFrom.Position[index], satTo.Position[index], maxFSODistance) {
 
 				distance := satFrom.Position[index].Distance(satTo.Position[index]) // Refactoring space would allow on less distance computation per link
-				cost := space.Latency(distance) * 1000000                           // QUESTION: is this conversion to microseconds?
+				cost := space.Latency(distance) * 1000000
 				// inserts edges with cost between node1 and node2
 				err = AddBothCost(g, len(satdata), node1, node2, int64(cost))
 

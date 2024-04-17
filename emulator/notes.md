@@ -49,9 +49,15 @@ Example : `podman tag groundstation:latest sjuhl1/groundstation`
 General : `podman push username/dockerrepo`
 Example : `podman push sjuhl1/groundstation`
 
+
 # Error messages and fixes
 
 * `2024/03/28 09:38:45 rtt106 1unsupproted kv int slash pair`
 
 * If unable to access register: `sudo sysctl -w net.ipv4.tcp_mtu_probing=1` 
 
+
+
+# Install podman
+
+I have had problems with installing a version where podman server and client was compatible. This should work: `https://software.opensuse.org//download.html?project=devel%3Akubic%3Alibcontainers%3Aunstable&package=podman`
