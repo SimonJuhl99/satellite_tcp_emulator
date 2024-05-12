@@ -28,7 +28,8 @@ import (
 
 const timeStepInt int = 10 // L2 timestep
 const timeStepL3 int = 30
-const shortestPath bool = true // controls output directory
+const shortestPath bool = false // controls output directory
+const latestChange bool = false
 const testTCPversion string = "cubic"
 const printOn bool = false
 const noDrop bool = true
@@ -78,16 +79,16 @@ func main() {
 	//* GETTING SAT DATA *//
 	var err error
 
-	// returns a slice containing instances of GroundStation struct
-	GroundStations, err = space.LoadGroundStations("./groundstations.txt")
-	if err != nil {
-		log.Fatal().Err(err).Msg("failed to load groundstations")
-	}
-	log.Info().Int("groundStationCount", len(GroundStations)).Msg("loaded groundstations")
+	// // returns a slice containing instances of GroundStation struct
+	// GroundStations, err = space.LoadGroundStations("./groundstations.txt")
+	// if err != nil {
+	// 	log.Fatal().Err(err).Msg("failed to load groundstations")
+	// }
+	// log.Info().Int("groundStationCount", len(GroundStations)).Msg("loaded groundstations")
 
 	// SatelliteIds, satellites, found := tle.LoadSatellites("./TD")
 	// SatelliteIds, satellites, found := tle.LoadSatellites("./TD_full")
-	var graphSize int = len(GroundStations)
+
 	// var SatelliteIds []int
 
 	startIperfTime := 90
@@ -106,15 +107,16 @@ func main() {
 	//endTime := time.Date(2022, 9, 21, 22, 00, 00, 00, time.UTC)
 	//timeStep := time.Duration(timeStepInt) * time.Second
 	oneSecond := time.Duration(1) * time.Second
-	///duration := endTime.Sub(startTime)
-	// retrieve data generated in satellite_positions.py (based on Israels simulation)
-	//var satellite_positions_path string = "./constellation-delta" + strconv.Itoa(timeStepInt) + ".parquet"
+
+	GroundStations = database.LoadGroundStationPositions("./groundstation-delta1_5k.parquet", startTime, oneSecond, 5000)
+
+	var graphSize int = len(GroundStations)
 
 	// =========== Load satellite positions ===========
 	log.Info().Msg("using simulated constellation")
 	// returns slice of OrbitalData structs, each struct containing positions (LatLong in degrees) for one satellite over time
 	//satdata = database.LoadSatellitePositions(satellite_positions_path, constellation_name, startTime, timeStep, 1000)
-	satdata = database.LoadSatellitePositions("./constellation-oneweb-delta1.parquet", constellation_name, startTime, oneSecond, 2000)
+	satdata = database.LoadSatellitePositions("./constellation-delta1_5k.parquet", constellation_name, startTime, oneSecond, 5000)
 	graphSize += len(satdata)
 	for _, orbitialData := range satdata {
 		SatelliteIds = append(SatelliteIds, orbitialData.SatelliteId)
@@ -213,13 +215,16 @@ func main() {
 	}
 	defer f.Close()
 
-	shortestPathChangeTimes := getShortestPathChangeTimes()
+	shortestPathChangeTimes := getPathChangeTimes("./shortest_paths")
 	log.Info().Interface("optimal change times", shortestPathChangeTimes).Msg("shortest path change times")
+
+	latestPathChangeTimes := getPathChangeTimes("./latest_changes")
+	log.Info().Interface("latest change times", latestPathChangeTimes).Msg("latest change times")
 
 	statsTransfered := false
 
 	//for index := 0; index < (int(duration)/(int(timeStep)))-1; index++ {
-	for index := 0; index < 2000; index++ {
+	for index := 0; index < 5000; index++ {
 
 		routeCost := 0
 
@@ -232,7 +237,16 @@ func main() {
 		}
 
 		// updateL3 := false
+
+		// // Shortest path change
 		// for _, changeTime := range shortestPathChangeTimes {
+		// 	if changeTime == index {
+		// 		updateL3 = true
+		// 	}
+		// }
+
+		// Latest path change
+		// for _, changeTime := range latestPathChangeTimes {
 		// 	if changeTime == index {
 		// 		updateL3 = true
 		// 	}
@@ -255,7 +269,7 @@ func main() {
 			log.Info().Msg("Time right now: " + strconv.Itoa((index - startTCPmetricsTime)))
 
 			// create edge if a GS and satellite are within maxFSODistance (edge cost calculated from distance)
-			graph.SetupGraphGroundStationEdges(gn, index, satdata, GroundStations, maxFSODistance)
+			graph.SetupGraphGroundStationEdgesV2(gn, index, satdata, GroundStations, maxFSODistance)
 
 			//Checking path vs new time step
 			//Getting the new path
@@ -406,30 +420,55 @@ func main() {
 				for pathindex := 0; pathindex < len(path)-1; pathindex++ {
 					graphid_1 := path[pathindex]
 					graphid_2 := path[pathindex+1]
-					if graphid_1 >= len(satdata) || graphid_2 >= len(satdata) { // Skip ground stations
+					if graphid_1 >= len(satdata) && graphid_2 >= len(satdata) {
 						continue
-					}
-					satFrom := satdata[graphid_1]
-					satTo := satdata[graphid_2]
-					// if two satellites are within eachothers reach (maxAPDistance)
-					if space.Reachable(satFrom.Position[simulationTime], satTo.Position[simulationTime], maxFSODistance) {
-						wg.Add(1)
-						go func(simulationTime int, satFrom, satTo space.OrbitalData) {
-							defer wg.Done()
-							distance := satFrom.Position[simulationTime].Distance(satTo.Position[simulationTime])
-							latency_ms := space.Latency(distance) * 1000 // QUESTION: why milliseconds here when microsec the other place?
-							// Performs a nearly atomic remove/add on an existing node id. If the node does not exist yet it is created.
-							cost := int(math.Ceil(latency_ms))
-							routeCost += cost
-							// each satellite will have two interfaces (one for each neighboring satellite)
-							// the interfaces on the satFrom satellite will have the IDs of the satTo satellites (this is used to indicate which channel is being emulated)
-							command_forward := qdiscCommand("Sat", satTo.SatelliteId, cost)
-							container_name_forward := fmt.Sprintf("Sat%d", satFrom.SatelliteId)
-							podman.RunCommand(container_name_forward, command_forward)
-							command_reverse := qdiscCommand("Sat", satFrom.SatelliteId, cost)
-							container_name_reverse := fmt.Sprintf("Sat%d", satTo.SatelliteId)
-							podman.RunCommand(container_name_reverse, command_reverse)
-						}(simulationTime, satFrom, satTo)
+					} else if graphid_1 >= len(satdata) { // if first node is a gs
+						gs := GroundStations[graphid_1-len(satdata)]
+						gs_satellite := satdata[graphid_2]
+						if space.Reachable(gs.Position[simulationTime], gs_satellite.Position[simulationTime], maxFSODistance) {
+							wg.Add(1)
+							go func(simulationTime int, gs space.GroundStation, satTo space.OrbitalData) { // TODO remove simulationTime from this and the other go routines
+								defer wg.Done()
+								distance := gs.Position[simulationTime].Distance(gs_satellite.Position[simulationTime])
+								latency_ms := space.Latency(distance) * 1000
+								cost := int(math.Ceil(latency_ms))
+								routeCost += cost
+								podman.RunCommand("GS"+gs.Title, qdiscCommand("Sat", gs_satellite.SatelliteId, cost))
+								podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs.Title, cost))
+							}(simulationTime, gs, gs_satellite)
+						}
+					} else if graphid_2 >= len(satdata) { // if last node is a gs
+						gs := GroundStations[graphid_2-len(satdata)]
+						gs_satellite := satdata[graphid_1]
+						if space.Reachable(gs.Position[simulationTime], gs_satellite.Position[simulationTime], maxFSODistance) {
+							wg.Add(1)
+							go func(simulationTime int, gs space.GroundStation, satTo space.OrbitalData) {
+								defer wg.Done()
+								distance := gs.Position[simulationTime].Distance(gs_satellite.Position[simulationTime])
+								latency_ms := space.Latency(distance) * 1000
+								cost := int(math.Ceil(latency_ms))
+
+								routeCost += cost
+								podman.RunCommand("GS"+gs.Title, qdiscCommand("Sat", gs_satellite.SatelliteId, cost))
+								podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs.Title, cost))
+							}(simulationTime, gs, gs_satellite)
+						}
+					} else {
+						satFrom := satdata[graphid_1]
+						satTo := satdata[graphid_2]
+						// if two satellites are within eachothers reach (maxAPDistance)
+						if space.Reachable(satFrom.Position[simulationTime], satTo.Position[simulationTime], maxFSODistance) {
+							wg.Add(1)
+							go func(simulationTime int, satFrom, satTo space.OrbitalData) {
+								defer wg.Done()
+								distance := satFrom.Position[simulationTime].Distance(satTo.Position[simulationTime])
+								latency_ms := space.Latency(distance) * 1000
+								cost := int(math.Ceil(latency_ms))
+								routeCost += cost
+								podman.RunCommand(fmt.Sprintf("Sat%d", satFrom.SatelliteId), qdiscCommand("Sat", satTo.SatelliteId, cost))
+								podman.RunCommand(fmt.Sprintf("Sat%d", satTo.SatelliteId), qdiscCommand("Sat", satFrom.SatelliteId, cost))
+							}(simulationTime, satFrom, satTo)
+						}
 					}
 				}
 
@@ -472,23 +511,33 @@ func main() {
 						if graphid_1 >= len(satdata) && graphid_2 >= len(satdata) {
 							continue
 						} else if graphid_1 >= len(satdata) { // if first node is a gs
-							gs_name := GroundStations[graphid_1-len(satdata)].Title
+							gs := GroundStations[graphid_1-len(satdata)]
 							gs_satellite := satdata[graphid_2]
-							wg.Add(1)
-							go func(simulationTime int, gs_name string, satTo space.OrbitalData) { // TODO remove simulationTime from this and the other go routines
-								defer wg.Done()
-								podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-								podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
-							}(simulationTime, gs_name, gs_satellite)
+							if space.Reachable(gs.Position[simulationTime], gs_satellite.Position[simulationTime], maxFSODistance) {
+								wg.Add(1)
+								go func(simulationTime int, gs space.GroundStation, satTo space.OrbitalData) { // TODO remove simulationTime from this and the other go routines
+									defer wg.Done()
+									distance := gs.Position[simulationTime].Distance(gs_satellite.Position[simulationTime])
+									latency_ms := space.Latency(distance) * 1000
+									cost := int(math.Ceil(latency_ms))
+									podman.RunCommand("GS"+gs.Title, qdiscCommand("Sat", gs_satellite.SatelliteId, cost))
+									podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs.Title, cost))
+								}(simulationTime, gs, gs_satellite)
+							}
 						} else if graphid_2 >= len(satdata) { // if last node is a gs
-							gs_name := GroundStations[graphid_2-len(satdata)].Title
+							gs := GroundStations[graphid_2-len(satdata)]
 							gs_satellite := satdata[graphid_1]
-							wg.Add(1)
-							go func(simulationTime int, gs_name string, satTo space.OrbitalData) {
-								defer wg.Done()
-								podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-								podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
-							}(simulationTime, gs_name, gs_satellite)
+							if space.Reachable(gs.Position[simulationTime], gs_satellite.Position[simulationTime], maxFSODistance) {
+								wg.Add(1)
+								go func(simulationTime int, gs space.GroundStation, satTo space.OrbitalData) {
+									defer wg.Done()
+									distance := gs.Position[simulationTime].Distance(gs_satellite.Position[simulationTime])
+									latency_ms := space.Latency(distance) * 1000
+									cost := int(math.Ceil(latency_ms))
+									podman.RunCommand("GS"+gs.Title, qdiscCommand("Sat", gs_satellite.SatelliteId, cost))
+									podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs.Title, cost))
+								}(simulationTime, gs, gs_satellite)
+							}
 						} else { // if both nodes are sats
 							satFrom := satdata[graphid_1]
 							satTo := satdata[graphid_2]
@@ -498,7 +547,6 @@ func main() {
 									defer wg.Done()
 									distance := satFrom.Position[simulationTime].Distance(satTo.Position[simulationTime])
 									latency_ms := space.Latency(distance) * 1000
-									// Performs a nearly atomic remove/add on an existing node id. If the node does not exist yet it is created.
 									cost := int(math.Ceil(latency_ms))
 									podman.RunCommand(fmt.Sprintf("Sat%d", satFrom.SatelliteId), qdiscCommand("Sat", satTo.SatelliteId, cost))
 									podman.RunCommand(fmt.Sprintf("Sat%d", satTo.SatelliteId), qdiscCommand("Sat", satFrom.SatelliteId, cost))
@@ -506,28 +554,26 @@ func main() {
 							}
 						}
 					}
-
-					log.Info().Msg("\n")
 				}
 
-				var gs_name string
-				var gs_satellite space.OrbitalData
+				// var gs_name string
+				// var gs_satellite space.OrbitalData
 
-				// TODO make function that can make gs-sat link by passing GS_ID, SAT_ID, GroundStations and satdata (and at some point COST as well)
+				// // TODO make function that can make gs-sat link by passing GS_ID, SAT_ID, GroundStations and satdata (and at some point COST as well)
 
-				gs_name = GroundStations[path[1]-len(SatelliteIds)].Title
-				gs_satellite = satdata[path[2]]
-				podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-				podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+				// gs_name = GroundStations[path[1]-len(SatelliteIds)].Title
+				// gs_satellite = satdata[path[2]]
+				// podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
+				// podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
 
-				gs_name = GroundStations[path[len(path)-2]-len(SatelliteIds)].Title
-				gs_satellite = satdata[path[len(path)-3]]
-				//podman.RunCommand("GS"+GroundStations[path[len(path)-(2-1)]-len(SatelliteIds)].Title, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-				podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-				podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+				// gs_name = GroundStations[path[len(path)-2]-len(SatelliteIds)].Title
+				// gs_satellite = satdata[path[len(path)-3]]
+				// //podman.RunCommand("GS"+GroundStations[path[len(path)-(2-1)]-len(SatelliteIds)].Title, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
+				// podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
+				// podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
 				wg.Wait()
 
-				_, err := f_cost.WriteString("Time " + strconv.Itoa(index) + "\tCost " + strconv.Itoa(routeCost) + "\n")
+				_, err := f_cost.WriteString("Time " + strconv.Itoa((index - startTCPmetricsTime)) + "\tCost " + strconv.Itoa(routeCost) + "\n")
 				if err != nil {
 					log.Error().Err(err).Msg("Error writing new path to file")
 				}
@@ -653,27 +699,54 @@ func main() {
 			for pathindex := 0; pathindex < len(path)-1; pathindex++ {
 				graphid_1 := path[pathindex]
 				graphid_2 := path[pathindex+1]
-				if graphid_1 >= len(satdata) || graphid_2 >= len(satdata) {
+				if graphid_1 >= len(satdata) && graphid_2 >= len(satdata) {
 					continue
-				}
-				satFrom := satdata[graphid_1]
-				satTo := satdata[graphid_2]
-				if space.Reachable(satFrom.Position[simulationTime], satTo.Position[simulationTime], maxFSODistance) {
-					wg.Add(1)
-					go func(simulationTime int, satFrom, satTo space.OrbitalData) {
-						defer wg.Done()
-						distance := satFrom.Position[simulationTime].Distance(satTo.Position[simulationTime])
-						latency_ms := space.Latency(distance) * 1000
-						// Performs a nearly atomic remove/add on an existing node id. If the node does not exist yet it is created.
-						cost := int(math.Ceil(latency_ms))
-						routeCost += cost
-						command_forward := qdiscCommand("Sat", satTo.SatelliteId, cost)
-						container_name_forward := fmt.Sprintf("Sat%d", satFrom.SatelliteId)
-						podman.RunCommand(container_name_forward, command_forward)
-						command_reverse := qdiscCommand("Sat", satFrom.SatelliteId, cost)
-						container_name_reverse := fmt.Sprintf("Sat%d", satTo.SatelliteId)
-						podman.RunCommand(container_name_reverse, command_reverse)
-					}(simulationTime, satFrom, satTo)
+				} else if graphid_1 >= len(satdata) { // if first node is a gs
+					gs := GroundStations[graphid_1-len(satdata)]
+					gs_satellite := satdata[graphid_2]
+					if space.Reachable(gs.Position[simulationTime], gs_satellite.Position[simulationTime], maxFSODistance) {
+						wg.Add(1)
+						go func(simulationTime int, gs space.GroundStation, satTo space.OrbitalData) { // TODO remove simulationTime from this and the other go routines
+							defer wg.Done()
+							distance := gs.Position[simulationTime].Distance(gs_satellite.Position[simulationTime])
+							latency_ms := space.Latency(distance) * 1000
+							cost := int(math.Ceil(latency_ms))
+							routeCost += cost
+							podman.RunCommand("GS"+gs.Title, qdiscCommand("Sat", gs_satellite.SatelliteId, cost))
+							podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs.Title, cost))
+						}(simulationTime, gs, gs_satellite)
+					}
+				} else if graphid_2 >= len(satdata) { // if last node is a gs
+					gs := GroundStations[graphid_2-len(satdata)]
+					gs_satellite := satdata[graphid_1]
+					if space.Reachable(gs.Position[simulationTime], gs_satellite.Position[simulationTime], maxFSODistance) {
+						wg.Add(1)
+						go func(simulationTime int, gs space.GroundStation, satTo space.OrbitalData) {
+							defer wg.Done()
+							distance := gs.Position[simulationTime].Distance(gs_satellite.Position[simulationTime])
+							latency_ms := space.Latency(distance) * 1000
+							cost := int(math.Ceil(latency_ms))
+							routeCost += cost
+							podman.RunCommand("GS"+gs.Title, qdiscCommand("Sat", gs_satellite.SatelliteId, cost))
+							podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs.Title, cost))
+						}(simulationTime, gs, gs_satellite)
+					}
+				} else {
+					satFrom := satdata[graphid_1]
+					satTo := satdata[graphid_2]
+					// if two satellites are within eachothers reach (maxAPDistance)
+					if space.Reachable(satFrom.Position[simulationTime], satTo.Position[simulationTime], maxFSODistance) {
+						wg.Add(1)
+						go func(simulationTime int, satFrom, satTo space.OrbitalData) {
+							defer wg.Done()
+							distance := satFrom.Position[simulationTime].Distance(satTo.Position[simulationTime])
+							latency_ms := space.Latency(distance) * 1000
+							cost := int(math.Ceil(latency_ms))
+							routeCost += cost
+							podman.RunCommand(fmt.Sprintf("Sat%d", satFrom.SatelliteId), qdiscCommand("Sat", satTo.SatelliteId, cost))
+							podman.RunCommand(fmt.Sprintf("Sat%d", satTo.SatelliteId), qdiscCommand("Sat", satFrom.SatelliteId, cost))
+						}(simulationTime, satFrom, satTo)
+					}
 				}
 			}
 
@@ -686,15 +759,33 @@ func main() {
 					if graphid_1 >= len(satdata) && graphid_2 >= len(satdata) {
 						continue
 					} else if graphid_1 >= len(satdata) { // if first node is a gs
-						gs_name := GroundStations[graphid_1-len(satdata)].Title
+						gs := GroundStations[graphid_1-len(satdata)]
 						gs_satellite := satdata[graphid_2]
-						podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-						podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+						if space.Reachable(gs.Position[simulationTime], gs_satellite.Position[simulationTime], maxFSODistance) {
+							wg.Add(1)
+							go func(simulationTime int, gs space.GroundStation, satTo space.OrbitalData) { // TODO remove simulationTime from this and the other go routines
+								defer wg.Done()
+								distance := gs.Position[simulationTime].Distance(gs_satellite.Position[simulationTime])
+								latency_ms := space.Latency(distance) * 1000
+								cost := int(math.Ceil(latency_ms))
+								podman.RunCommand("GS"+gs.Title, qdiscCommand("Sat", gs_satellite.SatelliteId, cost))
+								podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs.Title, cost))
+							}(simulationTime, gs, gs_satellite)
+						}
 					} else if graphid_2 >= len(satdata) { // if last node is a gs
-						gs_name := GroundStations[graphid_2-len(satdata)].Title
+						gs := GroundStations[graphid_2-len(satdata)]
 						gs_satellite := satdata[graphid_1]
-						podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-						podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+						if space.Reachable(gs.Position[simulationTime], gs_satellite.Position[simulationTime], maxFSODistance) {
+							wg.Add(1)
+							go func(simulationTime int, gs space.GroundStation, satTo space.OrbitalData) {
+								defer wg.Done()
+								distance := gs.Position[simulationTime].Distance(gs_satellite.Position[simulationTime])
+								latency_ms := space.Latency(distance) * 1000
+								cost := int(math.Ceil(latency_ms))
+								podman.RunCommand("GS"+gs.Title, qdiscCommand("Sat", gs_satellite.SatelliteId, cost))
+								podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs.Title, cost))
+							}(simulationTime, gs, gs_satellite)
+						}
 					} else { // if both nodes are sats
 						satFrom := satdata[graphid_1]
 						satTo := satdata[graphid_2]
@@ -704,7 +795,6 @@ func main() {
 								defer wg.Done()
 								distance := satFrom.Position[simulationTime].Distance(satTo.Position[simulationTime])
 								latency_ms := space.Latency(distance) * 1000
-								// Performs a nearly atomic remove/add on an existing node id. If the node does not exist yet it is created.
 								cost := int(math.Ceil(latency_ms))
 								podman.RunCommand(fmt.Sprintf("Sat%d", satFrom.SatelliteId), qdiscCommand("Sat", satTo.SatelliteId, cost))
 								podman.RunCommand(fmt.Sprintf("Sat%d", satTo.SatelliteId), qdiscCommand("Sat", satFrom.SatelliteId, cost))
@@ -714,22 +804,22 @@ func main() {
 				}
 			}
 
-			var gs_name string
-			var gs_satellite space.OrbitalData
+			// var gs_name string
+			// var gs_satellite space.OrbitalData
 
-			gs_name = GroundStations[path[1]-len(SatelliteIds)].Title
-			gs_satellite = satdata[path[2]]
-			podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-			podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+			// gs_name = GroundStations[path[1]-len(SatelliteIds)].Title
+			// gs_satellite = satdata[path[2]]
+			// podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
+			// podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
 
-			gs_name = GroundStations[path[len(path)-2]-len(SatelliteIds)].Title
-			gs_satellite = satdata[path[len(path)-3]]
-			//podman.RunCommand("GS"+GroundStations[path[len(path)-(2-1)]-len(SatelliteIds)].Title, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-			podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
-			podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
+			// gs_name = GroundStations[path[len(path)-2]-len(SatelliteIds)].Title
+			// gs_satellite = satdata[path[len(path)-3]]
+			// //podman.RunCommand("GS"+GroundStations[path[len(path)-(2-1)]-len(SatelliteIds)].Title, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
+			// podman.RunCommand("GS"+gs_name, qdiscCommand("Sat", gs_satellite.SatelliteId, 0))
+			// podman.RunCommand(fmt.Sprintf("Sat%d", gs_satellite.SatelliteId), qdiscCommandGS("GS", gs_name))
 			wg.Wait()
 
-			_, err := f_cost.WriteString("Time " + strconv.Itoa(index) + "\tCost " + strconv.Itoa(routeCost) + "\n")
+			_, err := f_cost.WriteString("Time " + strconv.Itoa((index - startTCPmetricsTime)) + "\tCost " + strconv.Itoa(routeCost) + "\n")
 			if err != nil {
 				log.Error().Err(err).Msg("Error writing new path to file")
 			}
@@ -744,15 +834,17 @@ func main() {
 		} else if index == startTCPmetricsTime {
 			startTesting2()
 			log.Info().Msg("TCP_metrics started")
-		} else if (index-startTCPmetricsTime) > 500 && !statsTransfered {
+		} else if (index-startTCPmetricsTime) > 2000 && !statsTransfered {
 			statsTransfered = true
 
-			log.Info().Msg("\n\n\n\n\tTEST OVER - 500 SECONDS PASSED ")
+			log.Info().Msg("\n\n\n\n\tTEST OVER - 2000 SECONDS PASSED ")
 
 			L2dir := strconv.Itoa(timeStepInt) + "sL2/"
 			L3dir := ""
 			if shortestPath {
 				L3dir = "shortestpath/"
+			} else if latestChange {
+				L3dir = "latestchange/"
 			} else {
 				L3dir = strconv.Itoa(timeStepL3) + "sL3/"
 			}
@@ -823,17 +915,17 @@ func startTesting1() {
 	log.Info().Str("IP", regexstr).Msg("GSKoto")
 
 	podman.RunCommand("GSKoto", "iperf3 -s -p 9191")
-	podman.RunCommand("GSElAlamo", "iperf3 -c "+regexstr+" -p 9191 -t 2000 -C "+testTCPversion)
+	podman.RunCommand("GSElAlamo", "iperf3 -c "+regexstr+" -p 9191 -t 3000 -C "+testTCPversion)
 }
 
 func startTesting2() {
-	podman.RunCommand("GSKoto", "./tcp_metrics -t 500")
-	podman.RunCommand("GSElAlamo", "./tcp_metrics -t 500")
+	podman.RunCommand("GSKoto", "./tcp_metrics -t 2000")
+	podman.RunCommand("GSElAlamo", "./tcp_metrics -t 2000")
 }
 
-func getShortestPathChangeTimes() []int {
+func getPathChangeTimes(filepath string) []int {
 
-	readFile, err := os.Open("./shortest_paths")
+	readFile, err := os.Open(filepath)
 
 	if err != nil {
 		fmt.Println(err)
@@ -869,8 +961,8 @@ func qdiscCommand(net_if string, satelliteId int, delay int) string { // QUESTIO
 	return fmt.Sprintf("tc qdisc replace dev %s%d root netem delay %dms rate 100mbit limit 500", net_if, satelliteId, delay)
 }
 
-func qdiscCommandGS(net_if string, gs_title string) string {
-	return fmt.Sprintf("tc qdisc replace dev %s%s root netem delay %dms rate 100mbit limit 500", net_if, gs_title, 0)
+func qdiscCommandGS(net_if string, gs_title string, delay int) string {
+	return fmt.Sprintf("tc qdisc replace dev %s%s root netem delay %dms rate 100mbit limit 500", net_if, gs_title, delay)
 }
 
 type connection struct {

@@ -3,7 +3,6 @@ package graph
 import (
 	"errors"
 	"project/space"
-	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/yourbasic/graph"
@@ -74,7 +73,7 @@ func SetupGraphSatelliteEdges(g *graph.Mutable, index int, satdata []space.Orbit
 	}
 }
 
-func SetupGraphGroundStationEdges(g *graph.Mutable, index int, simulationTime time.Time, satdata []space.OrbitalData, gsdata []space.GroundStation, maxFSODistance float64) {
+func SetupGraphGroundStationEdges(g *graph.Mutable, index int, satdata []space.OrbitalData, gsdata []space.GroundStation, maxFSODistance float64) {
 	for gsid, gs := range gsdata {
 		if !gs.IsAP {
 			continue
@@ -100,6 +99,7 @@ func SetupGraphGroundStationEdges(g *graph.Mutable, index int, simulationTime ti
 			if printOn {
 				log.Debug().Int("gsid", gsid).Int("satid", sat.SatelliteId).Float64("distance", distance).Msg("new GS->Satellite")
 			}
+			log.Info().Str("From ", gs.Title).Str("To ", sat.Title).Int64("cost", int64(cost)).Msg("V1")
 			err := AddBothCost(g, len(gsdata)+len(satdata), len(satdata)+gsid, node1, int64(cost))
 			if err != nil {
 				log.Error().Err(err).Str("gsname", gs.Title).Msg("failed to add cost path to graph")
@@ -111,6 +111,45 @@ func SetupGraphGroundStationEdges(g *graph.Mutable, index int, simulationTime ti
 	}
 }
 
+// uses xyz positions instead of latlong
+func SetupGraphGroundStationEdgesV2(g *graph.Mutable, index int, satdata []space.OrbitalData, gsdata []space.GroundStation, maxFSODistance float64) {
+	for gsid, gs := range gsdata {
+		if !gs.IsAP {
+			continue
+		}
+		for node1, sat := range satdata {
+
+			var err error
+
+			if space.Reachable(gs.Position[index], sat.Position[index], maxFSODistance) {
+
+				distance := gs.Position[index].Distance(sat.Position[index]) // Refactoring space would allow on less distance computation per link
+				cost := space.Latency(distance) * 1000000
+				// inserts edges with cost between node1 and node2
+				//log.Info().Str("From ", gs.Title).Str("To ", sat.Title).Int64("cost", int64(cost)).Msg("V2")
+				err = AddBothCost(g, len(gsdata)+len(satdata), len(satdata)+gsid, node1, int64(cost))
+
+			} else {
+				err = AddBothCost(g, len(gsdata)+len(satdata), len(satdata)+gsid, node1, -1)
+			}
+			if err != nil {
+				log.Error().Int("satFrom", gs.ID).Int("satTo", sat.SatelliteId).Err(err).Msg("Error in adding edge")
+			}
+
+			// err := AddBothCost(g, len(gsdata)+len(satdata), len(satdata)+gsid, node1, -1)
+
+			// err := AddBothCost(g, len(gsdata)+len(satdata), len(satdata)+gsid, node1, int64(cost))
+			// if err != nil {
+			// 	log.Error().Err(err).Str("gsname", gs.Title).Msg("failed to add cost path to graph")
+			// }
+			// if printOn {
+			// 	log.Info().Bool("visible", visible).Float64("distance", distance).Str("gsname", gs.Title).Msg("adding GS link")
+			// }
+		}
+	}
+}
+
+// setup Koto-Tokyo edge and ElAlamo-Madrid edge
 func SetupGraphAccessPointEdges(g *graph.Mutable, graphSize int, gsdata []space.GroundStation, maxAPDistance float64) {
 	graphOffset := graphSize - len(gsdata)
 	for gs1id, gs1 := range gsdata {
@@ -125,7 +164,7 @@ func SetupGraphAccessPointEdges(g *graph.Mutable, graphSize int, gsdata []space.
 				continue
 			}
 
-			visible, distance := space.AccessPointVisible(&gs1, &gs2, maxAPDistance) // QUESTION: to me it looks like u calculate the circle arc, but how does the work as a measure when u wanna figure out if the AP is visible?
+			visible, distance := space.AccessPointVisible(&gs1, &gs2, maxAPDistance)
 			if visible && printOn {
 				log.Debug().Bool("visible", visible).Float64("distance", distance).Msg("Access Point In Range")
 			}
@@ -138,6 +177,7 @@ func SetupGraphAccessPointEdges(g *graph.Mutable, graphSize int, gsdata []space.
 				continue
 			}
 			cost := space.Latency(float64(distance)) * 1000000
+			log.Info().Int("gs1id", gs1id).Int("gs2id", gs2id).Msg("")
 			err := AddBothCost(g, graphSize, graphOffset+gs1id, graphOffset+gs2id, int64(cost))
 			if err != nil {
 				log.Error().Err(err).Str("gs1name", gs1.Title).Str("gs2name", gs2.Title).Msg("failed to add cost path to graph")

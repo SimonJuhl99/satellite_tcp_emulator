@@ -3,7 +3,7 @@ from InterPlaneInterSatelliteConnectivity import GroundSegment
 import numpy as np
 import pandas as pd
 
-delta_t = 15
+delta_t = 1
 N, h, inclination, is_walker_star = Constellation.commercial_constellation_parameters(
     "OneWeb"
 )
@@ -12,7 +12,7 @@ constellation = Constellation.Constellation(N, h, inclination, is_walker_star)
 # constellation.rotate(delta_t)  # coordinates are populated by first rotation
 print(constellation)
 
-M = 1000  # time steps
+M = 5000  # time steps
 NM = N * M                                                                      # <= QUESTION: Why do we need a length N*M array when we only use N*N?
 
 X, Y, Z = np.empty(NM), np.empty(NM), np.empty(NM)
@@ -21,9 +21,10 @@ SatelliteID = np.empty(NM, dtype=np.int64)
 # line_index = 0
 
 # N is the number of satellites
-for i in range(M):                                                              # <= QUESTION: Should this be the time M instead?
+# For each time step rotate the constellation
+for i in range(M):
     constellation.rotate(delta_t)  # coordinates are populated by first rotation
-    # for each satellite in constellation, retrieve satellite object
+    # for each satellite in rotated constellation, retrieve satellite object
     for i_s, satellite in enumerate(constellation.satellites):
         SatelliteID[(i * N) + i_s] = satellite.id
         TimeIndex[(i * N) + i_s] = i
@@ -42,5 +43,5 @@ dataframe = pd.DataFrame(
 )
 
 # write dataframe to parquet file format
-dataframe.to_parquet("emulator/constellation-delta15.parquet", index=False)
-load = pd.read_parquet("emulator/constellation-delta15.parquet")
+dataframe.to_parquet("emulator/constellation-delta1_5k.parquet", index=False)
+#load = pd.read_parquet("emulator/constellation-delta1.parquet")

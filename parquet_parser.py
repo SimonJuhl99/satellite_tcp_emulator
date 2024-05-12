@@ -47,9 +47,11 @@ metrics_info = {
 
 def loadFile(file):
     route_change_times = []
+    route_lengths = []
 
     content=file.readlines()
     #content.pop(0)              # do not include the first time a route is found
+
 
     for line in content:
         spl = line.split()
@@ -58,10 +60,20 @@ def loadFile(file):
                 route_change_times.append(int(spl[idx+1]))
                 break
 
-    #print(route_change_times)
-    file.close()
+    for line in content:
+        spl = line.split()
+        for idx, word in enumerate(spl):
+            if word == "length":
+                route_lengths.append(int(spl[idx+1]))
+                break
 
-    return route_change_times
+    return route_change_times, route_lengths
+
+
+def getLengthDiffs(route_lengths):
+    print(route_lengths)
+    for i in range(len(route_lengths)-1):
+        print(route_lengths[i]-route_lengths[i+1])
 
 # convert a cumulative metric to period
 def accumulated_to_periodic(df, id, metric):
@@ -84,12 +96,84 @@ def accumulated_to_periodic(df, id, metric):
                 if periodic_value == 0:
                     low_gp_count += 1
 
-    print("low_gp_count " + str(low_gp_count))
-
     return y
 
 
-def receiver_handler(df, id, metrics):
+def total_unavailability(df, id, title):
+    global threshold
+    prev_accumulated = -1
+    y = []
+    count = 0
+    unavailability_ms = 0
+    unavailability_array_ms = []
+    first_index = 0
+    last_index = 0
+
+    for i, el in enumerate(df['timestamp']):
+        # the ingoing connection has id=1
+        if int(df['id'][i]) == id:
+            if prev_accumulated == -1:
+                prev_accumulated = df["bytes_received"][i]
+                first_index = i
+                continue    # continue since prev_accumulated will make the goodput 0 for this iteration
+
+            periodic_value = df["bytes_received"][i] - prev_accumulated
+            y.append(periodic_value)
+            prev_accumulated = df["bytes_received"][i]
+
+            if periodic_value*8 <= threshold:   # convert to bits for comparison
+                count += 1
+            else:
+                if count == 0:
+                    continue
+                else:
+                    unavailability_ms += (count-1)*50
+                    unavailability_array_ms.append((count-1)*50)
+                    count = 0
+            last_index = i
+
+
+    testduration_ms = 2000000
+    availability = (testduration_ms-unavailability_ms)/testduration_ms
+
+    #print("\tTotal throughput          : " + str(df["bytes_received"][last_index] - df["bytes_received"][first_index]))
+    print(title)
+    print("\tTotal unavailability in ms: " + str(unavailability_ms))
+    print("\tAvailability              : " + str(availability))
+
+    if 1 == 2:
+        bin_edges = list(range(0, 1000, 50))
+        # for i in range(len(bin_edges)):
+        #     if i%2 != 0:
+        #         bin_edges[i] = ""
+
+        plt.figure(figsize=(7,4.5))
+        counts, edges, bars = plt.hist(unavailability_array_ms, bins=bin_edges, edgecolor='black', )
+
+        # Set labels and title
+        plt.bar_label(bars)
+        plt.xlabel('Duration of unavailable period (milliseconds)', fontsize=13)
+        plt.ylabel('Number of periods', fontsize=13)
+        plt.title("Unavailable periods of\n" + title + " schedule", fontsize=14)
+
+        plt.xticks(bin_edges, fontsize=11)
+        plt.yticks(fontsize=11)
+        for label in plt.gca().get_xticklabels()[::2]:
+            label.set_visible(False)
+
+        # print(plt.ax.xaxis.get_ticklabels())
+        # for label in plt.get_ticklabels()[::2]:
+        #     label.set_visible(False)
+
+        plt.ylim(0, 110)
+        plt.xlim(0, 1000)
+
+        # Show plot
+        plt.grid(True)
+        plt.show()
+
+
+def receiver_handler(df, id, metrics, title):
     num_of_cumulative_metrics = 0
     num_of_sampled_metrics = 0
     cumulative_metrics = []
@@ -127,6 +211,7 @@ def receiver_handler(df, id, metrics):
 
     for i, metric in enumerate(cumulative_metrics):
         y[num_of_sampled_metrics + i] = accumulated_to_periodic(df, id, metric)
+        total_unavailability(df, id, title)
         
     
     return np.array(x), np.array(y), unix_start_time
@@ -318,7 +403,7 @@ def plotty2(cubic_d, reno_d, route_change_times, titles):
 
         labels = receiver_labels + sender_labels        
 
-        axes[0].set(xlim=(-10, 1010), ylim=metrics_info[labels[0]]['ylim'], xlabel="Time (seconds)", ylabel=labels[0])
+        axes[0].set(xlim=(-10, 2010), ylim=metrics_info[labels[0]]['ylim'], xlabel="Time (seconds)", ylabel=labels[0])
         for j in range(num_of_metrics-1):
             axes[j+1].set(ylim=metrics_info[labels[j+1]]['ylim'], ylabel=labels[j+1])
 
@@ -536,13 +621,13 @@ def cubic_old_vs_new_20sec(route_change_times):
     sender_metrics = ["rtt_mean", "congestion_window"]
 
 
-    data_test1 = ["./data/20sec/tcp_stats_koto_cubic_drop.parquet", 
-                  "./data/20sec/tcp_stats_elalamo_cubic_drop.parquet"]
-    data_test2 = ["./data/20sec/tcp_stats_koto_cubic_nodrop.parquet", 
-                  "./data/20sec/tcp_stats_elalamo_cubic_nodrop.parquet"]
+    data_test1 = ["./data/20sec_new/tcp_stats_koto_cubic_drop.parquet", 
+                  "./data/20sec_new/tcp_stats_elalamo_cubic_drop.parquet"]
+    data_test2 = ["./data/20sec_new/tcp_stats_koto_cubic_nodrop.parquet", 
+                  "./data/20sec_new/tcp_stats_elalamo_cubic_nodrop.parquet"]
 
     ids_test1 = [0,0]
-    ids_test2 = [1,1]
+    ids_test2 = [1,0]
 
     title_top = "L2 updates 10 sec - L3 updates 20 sec - Cubic drop"
     title_bottom = "L2 updates 10 sec - L3 updates 20 sec - Cubic nodrop"
@@ -567,39 +652,75 @@ def cubic_old_vs_new_10sec(route_change_times):
 
     top_bottom_comparison(receiver_metrics, sender_metrics, data_test1, data_test2, ids_test1, ids_test2, route_change_times)
 
-# def cubic_old_vs_new_30sec(route_change_times):
-#     # IMPORTANT! Put metrics with "type:sample" first in each array
-#     #bytes_received
-#     #congestion_window
+def all_cubic(route_change_times_10, route_change_times_20, route_change_times_30, route_change_times_sp, route_change_times_lc):
+    receiver_metrics = ["bytes_received"] #["last_acknowledgment"]
+    sender_metrics = ["rtt_mean", "congestion_window"]
 
-#     receiver_metrics = ["bytes_received"] #["last_acknowledgment"]
-#     sender_metrics = ["rtt_mean", "congestion_window"]
+    data_test_10 = ["./stats/2k/10sL3/tcp_stats_koto_cubic_nodrop.parquet", 
+                  "./stats/2k/10sL3/tcp_stats_elalamo_cubic_nodrop.parquet"]
+    data_test_20 = ["./stats/2k/20sL3/tcp_stats_koto_cubic_nodrop.parquet", 
+                  "./stats/2k/20sL3/tcp_stats_elalamo_cubic_nodrop.parquet"]
+    data_test_30 = ["./stats/2k/30sL3/tcp_stats_koto_cubic_nodrop.parquet", 
+                  "./stats/2k/30sL3/tcp_stats_elalamo_cubic_nodrop.parquet"]
+    data_test_sp = ["./stats/2k/shortestpath/tcp_stats_koto_cubic_nodrop.parquet", 
+                  "./stats/2k/shortestpath/tcp_stats_elalamo_cubic_nodrop.parquet"]
+    # data_test_lc = ["./stats/tmp/tcp_stats_koto_cubic_nodrop.parquet", 
+    #               "./stats/tmp/tcp_stats_elalamo_cubic_nodrop.parquet"]
+    data_test_lc = ["./stats/2k/latestchange/tcp_stats_koto_cubic_nodrop.parquet", 
+                  "./stats/2k/latestchange/tcp_stats_elalamo_cubic_nodrop.parquet"]
 
+    ids_test_10 = [1,1]
+    ids_test_20 = [0,0]
+    ids_test_30 = [0,1]
+    ids_test_sp = [1,1]
+    #ids_test_lc = [0,1]
+    ids_test_lc = [0,0]
 
+    title_10 = "10 sec"
+    title_20 = "20 sec"
+    title_30 = "30 sec"
+    title_sp = "Shortest path"
+    title_lc = "Latest change"
 
-#     data_test1 = ["./tcp_stats/30sec/tcp_stats_koto_cubic_drop.parquet", 
-#                   "./tcp_stats/30sec/tcp_stats_elalamo_cubic_drop.parquet"]
-#     data_test2 = ["./tcp_stats/30sec/tcp_stats_koto_cubic_nodrop.parquet", 
-#                   "./tcp_stats/30sec/tcp_stats_elalamo_cubic_nodrop.parquet"]
+    top_bottom_comparison(receiver_metrics, sender_metrics, 
+                          data_test_sp, data_test_lc, ids_test_sp, ids_test_lc, [route_change_times_sp, route_change_times_lc], [title_sp, title_lc])
+    # top_bottom_comparison(receiver_metrics, sender_metrics, 
+    #                       data_test_sp, data_test_10, ids_test_sp, ids_test_10, [route_change_times_sp, route_change_times_10], [title_sp, title_10])
+    top_bottom_comparison(receiver_metrics, sender_metrics, 
+                          data_test_10, data_test_20, ids_test_10, ids_test_20, [route_change_times_10, route_change_times_20], [title_10, title_20])
+    top_bottom_comparison(receiver_metrics, sender_metrics, 
+                          data_test_20, data_test_30, ids_test_20, ids_test_30, [route_change_times_20, route_change_times_30], [title_20, title_30])
 
-#     ids_test1 = [0,1]
-#     ids_test2 = [1,0]
+def cubic_10sec_vs_shortestpath_nodrop(route_change_times_10, route_change_times_30):
+    receiver_metrics = ["bytes_received"] #["last_acknowledgment"]
+    sender_metrics = ["rtt_mean", "congestion_window"]
 
-#     top_bottom_comparison(receiver_metrics, sender_metrics, data_test1, data_test2, ids_test1, ids_test2, route_change_times)
+    data_test1 = ["./stats/new/10sL3/tcp_stats_koto_cubic_nodrop.parquet", 
+                  "./stats/new/10sL3/tcp_stats_elalamo_cubic_nodrop.parquet"]
+    data_test2 = ["./stats/new/shortestpath/tcp_stats_koto_cubic_nodrop.parquet", 
+                  "./stats/new/shortestpath/tcp_stats_elalamo_cubic_nodrop.parquet"]
+
+    ids_test1 = [1,0]
+    ids_test2 = [0,0]
+
+    title_top = "Cubic nodrop - L3 updates 10 sec"
+    title_bottom = "Cubic nodrop - L3 updates shortest path"
+
+    top_bottom_comparison(receiver_metrics, sender_metrics, data_test1, data_test2, ids_test1, ids_test2, [route_change_times_10, route_change_times_30], [title_top, title_bottom])
 
 def cubic_20sec_vs_30sec_nodrop(route_change_times_20, route_change_times_30):
     receiver_metrics = ["bytes_received"] #["last_acknowledgment"]
     sender_metrics = ["rtt_mean", "congestion_window"]
 
-    data_test1 = ["./data/20sec/tcp_stats_koto_cubic_nodrop.parquet", 
-                  "./data/20sec/tcp_stats_elalamo_cubic_nodrop.parquet"]
-    data_test2 = ["./data/30sec/tcp_stats_koto_cubic_nodrop.parquet", 
-                  "./data/30sec/tcp_stats_elalamo_cubic_nodrop.parquet"]
+    data_test1 = ["./stats/new/20sL3/tcp_stats_koto_cubic_nodrop.parquet", 
+                  "./stats/new/20sL3/tcp_stats_elalamo_cubic_nodrop.parquet"]
+    data_test2 = ["./stats/new/30sL3/tcp_stats_koto_cubic_nodrop.parquet", 
+                  "./stats/new/30sL3/tcp_stats_elalamo_cubic_nodrop.parquet"]
 
-    ids_test1 = [1,1]
-    ids_test2 = [1,0]
+    ids_test1 = [0,1]
+    ids_test2 = [0,1]
 
-    title_top = "L2 updates 10 sec - L3 updates 20 sec - Cubic nodrop"
+    title_top = "L2 updates 10 sec - L3 updates 20 sec - Cubic nodrop"  
     title_bottom = "L2 updates 10 sec - L3 updates 30 sec - Cubic nodrop"
 
     top_bottom_comparison(receiver_metrics, sender_metrics, data_test1, data_test2, ids_test1, ids_test2, [route_change_times_20, route_change_times_30], [title_top, title_bottom])
@@ -608,19 +729,35 @@ def cubic_20sec_vs_30sec_drop(route_change_times_20, route_change_times_30):
     receiver_metrics = ["bytes_received"] #["last_acknowledgment"]
     sender_metrics = ["rtt_mean", "congestion_window"]
 
-    data_test1 = ["./data/20sec/tcp_stats_koto_cubic_drop.parquet", 
-                  "./data/20sec/tcp_stats_elalamo_cubic_drop.parquet"]
-    data_test2 = ["./data/30sec/tcp_stats_koto_cubic_drop.parquet", 
-                  "./data/30sec/tcp_stats_elalamo_cubic_drop.parquet"]
+    data_test1 = ["./data/20sec_new/tcp_stats_koto_cubic_drop.parquet", 
+                  "./data/20sec_new/tcp_stats_elalamo_cubic_drop.parquet"]
+    data_test2 = ["./data/30sec_new/tcp_stats_koto_cubic_drop.parquet", 
+                  "./data/30sec_new/tcp_stats_elalamo_cubic_drop.parquet"]
 
     ids_test1 = [0,0]
-    ids_test2 = [0,0]
+    ids_test2 = [1,1]
 
     title_top = "L2 updates 10 sec - L3 updates 20 sec - Cubic drop"
     title_bottom = "L2 updates 10 sec - L3 updates 30 sec - Cubic drop"
 
     top_bottom_comparison(receiver_metrics, sender_metrics, data_test1, data_test2, ids_test1, ids_test2, [route_change_times_20, route_change_times_30], [title_top, title_bottom])
 
+def cubic_testing(route_change_times):
+    receiver_metrics = ["bytes_received"] #["last_acknowledgment"]
+    sender_metrics = ["rtt_mean", "congestion_window"]
+
+    data_test1 = ["./stats/10sL2/30sL3/tcp_stats_koto_cubic_drop.parquet", 
+                  "./stats/10sL2/30sL3/tcp_stats_elalamo_cubic_drop.parquet"]
+    data_test2 = ["./data/30sec_new/tcp_stats_koto_cubic_drop.parquet", 
+                  "./data/30sec_new/tcp_stats_elalamo_cubic_drop.parquet"]
+
+    ids_test1 = [1,1]
+    ids_test2 = [1,1]
+
+    title_top = "L2 updates 10 sec - L3 updates 20 sec - Cubic drop"
+    title_bottom = "L2 updates 10 sec - L3 updates 30 sec - Cubic drop"
+
+    top_bottom_comparison(receiver_metrics, sender_metrics, data_test1, data_test2, ids_test1, ids_test2, route_change_times_30, [title_top, title_bottom])
 
 def goodput_difference():
 
@@ -680,9 +817,79 @@ def goodput_difference():
     # print("df_koto_drop: " + str(df_koto_drop["bytes_received"][len(df_koto_drop)-1]))
     # print("df_koto_nodrop: " + str(df_koto_nodrop["bytes_received"][len(df_koto_nodrop)-1]))
 
+def ecdf():
+    data_test1 = ["./stats/10sL2/10sL3/tcp_stats_koto_cubic_nodrop.parquet", 
+                  "./stats/10sL2/10sL3/tcp_stats_elalamo_cubic_nodrop.parquet"]
+    data_test2 = ["./stats/10sL2/shortestpath/tcp_stats_koto_cubic_nodrop.parquet", 
+                  "./stats/10sL2/shortestpath/tcp_stats_elalamo_cubic_nodrop.parquet"]
+    data_test3 = ["./stats/10sL2/20sL3/tcp_stats_koto_cubic_nodrop.parquet", 
+                  "./stats/10sL2/20sL3/tcp_stats_elalamo_cubic_nodrop.parquet"]
+    data_test4 = ["./stats/10sL2/30sL3/tcp_stats_koto_cubic_nodrop.parquet", 
+                  "./stats/10sL2/30sL3/tcp_stats_elalamo_cubic_nodrop.parquet"]
+    
+    df1_0 = pd.read_parquet(data_test1[0], engine='fastparquet')
+    df1_1 = pd.read_parquet(data_test1[1], engine='fastparquet')
+    df2_0 = pd.read_parquet(data_test2[0], engine='fastparquet')
+    df2_1 = pd.read_parquet(data_test2[1], engine='fastparquet')
+    df3_0 = pd.read_parquet(data_test3[0], engine='fastparquet')
+    df3_1 = pd.read_parquet(data_test3[1], engine='fastparquet')
+    df4_0 = pd.read_parquet(data_test4[0], engine='fastparquet')
+    df4_1 = pd.read_parquet(data_test4[1], engine='fastparquet')
+
+    tp1 = accumulated_to_periodic(df1_0, 0, "bytes_received")
+    tp1_sorted = get_sorted_and_clipped(tp1)
+
+    tp2 = accumulated_to_periodic(df2_0, 0, "bytes_received")
+    tp2_sorted = get_sorted_and_clipped(tp2)
+    
+    tp3 = accumulated_to_periodic(df3_0, 1, "bytes_received")
+    tp3_sorted = get_sorted_and_clipped(tp3)
+    
+    tp4 = accumulated_to_periodic(df4_0, 1, "bytes_received")
+    tp4_sorted = get_sorted_and_clipped(tp4)
+
+    cwnd1 = accumulated_to_periodic(df1_1, 1, "congestion_window")
+    cwnd1_sorted = get_sorted_and_clipped(cwnd1)
+
+    cwnd2 = accumulated_to_periodic(df2_1, 1, "congestion_window")
+    cwnd2_sorted = get_sorted_and_clipped(cwnd2)
+    
+    cwnd3 = accumulated_to_periodic(df3_1, 1, "congestion_window")
+    cwnd3_sorted = get_sorted_and_clipped(cwnd3)
+    
+    cwnd4 = accumulated_to_periodic(df4_1, 1, "congestion_window")
+    cwnd4_sorted = get_sorted_and_clipped(cwnd4)
+
+
+    get_ecdf([tp1_sorted, tp2_sorted, tp3_sorted, tp4_sorted], ["tp1", "tp2", "tp3", "tp4"])
+    get_ecdf([cwnd1_sorted, cwnd2_sorted, cwnd3_sorted, cwnd4_sorted], ["cwnd1", "cwnd2", "cwnd3", "cwnd4"])
+
+
+def get_sorted_and_clipped(data):
+    sorted = np.sort(data)
+    clipped = sorted[(1500000 > sorted)]
+    return clipped
+
+def get_ecdf(datasets, labels):
+   
+    plt.figure(figsize=(8, 6))
+    
+    print(labels)
+    for i, data in enumerate(datasets):
+        n = len(data)
+        y = np.arange(1, n+1) / n
+        plt.step(data, y, where='post', label=labels[i])
+
+    plt.xlabel('Data Points')
+    plt.ylabel('Empirical CDF')
+    plt.title('Empirical Cumulative Distribution Function (CDF)')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
 def top_bottom_comparison(receiver_metrics, sender_metrics, data_test1, data_test2, ids_test1, ids_test2, route_change_times, title):
     receiver_df = pd.read_parquet(data_test1[0], engine='fastparquet')
-    receiver_t, receiver_data, receiver_start_time = receiver_handler(receiver_df, ids_test1[0], receiver_metrics)
+    receiver_t, receiver_data, receiver_start_time = receiver_handler(receiver_df, ids_test1[0], receiver_metrics, title[0])
     sender_df = pd.read_parquet(data_test1[1], engine='fastparquet')
     sender_t, sender_data, sender_start_time = sender_handler(sender_df, ids_test1[1], sender_metrics)
     receiver_t, sender_t = start_time_normalization(receiver_start_time, sender_start_time, receiver_t, sender_t)
@@ -690,28 +897,42 @@ def top_bottom_comparison(receiver_metrics, sender_metrics, data_test1, data_tes
     cubic_nodrop_data = [receiver_t, receiver_data, receiver_metrics, sender_t, sender_data, sender_metrics]
 
     receiver_df = pd.read_parquet(data_test2[0], engine='fastparquet')
-    receiver_t, receiver_data, receiver_start_time = receiver_handler(receiver_df, ids_test2[0], receiver_metrics)
+    receiver_t, receiver_data, receiver_start_time = receiver_handler(receiver_df, ids_test2[0], receiver_metrics, title[1])
     sender_df = pd.read_parquet(data_test2[1], engine='fastparquet')
     sender_t, sender_data, sender_start_time = sender_handler(sender_df, ids_test2[1], sender_metrics)
     receiver_t, sender_t = start_time_normalization(receiver_start_time, sender_start_time, receiver_t, sender_t)
 
     cubic_data = [receiver_t, receiver_data, receiver_metrics, sender_t, sender_data, sender_metrics]
 
-    #plotty(cubic_nodrop_data, cubic_data)
-    plotty2(cubic_nodrop_data, cubic_data, route_change_times, title)
+    #plotty2(cubic_nodrop_data, cubic_data, route_change_times, title)
 
 if __name__ == "__main__":
     #goodput_difference()
-    f10 = open("./route_change_files/route-changes-update-L3-every-10-seconds", "r")
-    route_change_times_10 = loadFile(f10)
-    f15 = open("./route_change_files/route-changes-update-L3-every-15-seconds_v2", "r")
-    route_change_times_15 = loadFile(f15)
-    f20 = open("./route_change_files/route-changes-update-L3-every-20-seconds", "r")
-    route_change_times_20 = loadFile(f20)
-    f30 = open("./route_change_files/route-changes-update-L3-every-30-seconds", "r")
-    route_change_times_30 = loadFile(f30)
+    f10 = open("./stats/2k/route_change_times/10sec", "r")
+    route_change_times_10, route_lengths_10 = loadFile(f10)
+    #route_length_diffs_10 = getLengthDiffs(route_lengths_10)
+    f10.close()
 
-    print(route_change_times_30)
+    f20 = open("./stats/2k/route_change_times/20sec", "r")
+    route_change_times_20, route_lengths_20 = loadFile(f20)
+    f20.close()
+
+    f30 = open("./stats/2k/route_change_times/30sec", "r")
+    route_change_times_30, route_lengths_30 = loadFile(f30)
+    f30.close()
+
+    fsp = open("./stats/2k/route_change_times/shortestpath", "r")
+    route_change_times_sp, route_lengths_sp = loadFile(fsp)
+    fsp.close()
+
+    flc = open("./stats/2k/route_change_times/latestchange", "r")
+    route_change_times_lc, route_lengths_lc = loadFile(flc)
+    flc.close()
+
+    # print("Number of route changes in 'always shortest path'", len(route_change_times_sp))
+    # print("Number of route changes in '10 seconds intervals'", len(route_change_times_10))
+    # print("Number of route changes in '20 seconds intervals'", len(route_change_times_20))
+    # print("Number of route changes in '30 seconds intervals'", len(route_change_times_30))
     
     #cubic_old_vs_new_30sec(route_change_times_30)
     
@@ -720,18 +941,23 @@ if __name__ == "__main__":
     #cubic_drop_10vs15(route_change_times_10, route_change_times_15)
     #cubic_old_vs_new_10sec(route_change_times_10)
     
-    cubic_20sec_vs_30sec_nodrop(route_change_times_20, route_change_times_30)
-    cubic_20sec_vs_30sec_drop(route_change_times_20, route_change_times_30)
-    cubic_old_vs_new_20sec(route_change_times_20)
-    cubic_old_vs_new_30sec(route_change_times_30)
-    cubic_old_vs_new_30sec_L2_15sec(route_change_times_30)
-    cubic_L3_30sec_diff_L2_nodrop(route_change_times_30)
-    cubic_L3_30sec_diff_L2_drop(route_change_times_30)
+    #print(route_change_times_10)
+    #ecdf()
+    threshold = 10000000 / 20 # bits/s divided by sampling frequency
+    all_cubic(route_change_times_10, route_change_times_20, route_change_times_30, route_change_times_sp, route_change_times_lc)
+    # cubic_10sec_vs_shortestpath_nodrop(route_change_times_10, route_change_times_sp)
+    # cubic_20sec_vs_30sec_nodrop(route_change_times_20, route_change_times_30)
+    #cubic_20sec_vs_30sec_drop(route_change_times_20, route_change_times_30) <-
     
+    # cubic_old_vs_new_20sec(route_change_times_20) # new
+    
+    # cubic_old_vs_new_30sec(route_change_times_30)
+    # cubic_old_vs_new_30sec_L2_15sec(route_change_times_30)
+    # cubic_L3_30sec_diff_L2_nodrop(route_change_times_30)
+    # cubic_L3_30sec_diff_L2_drop(route_change_times_30)
+    
+    #cubic_testing(route_change_times_20)
+
     #reno_old_vs_new_10sec()
     #reno_old_vs_new()
     #setup1()
-    
-
-    
-

@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/containers/common/libnetwork/types"
 	dockertypes "github.com/docker/docker/api/types"
@@ -23,7 +22,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const printOn bool = false
+const printOn bool = true
 
 var (
 	ctx context.Context
@@ -173,6 +172,10 @@ func SetupLink(linkDetails LinkDetails) {
 		return
 	}
 
+	if printOn {
+		log.Debug().Interface("cn", cn.Name).Msg("Added Network")
+	}
+
 	network.Disconnect(ctx, "podman", linkDetails.NodeOneId, &network.DisconnectOptions{})
 	network.Disconnect(ctx, "podman", linkDetails.NodeTwoId, &network.DisconnectOptions{})
 
@@ -182,7 +185,7 @@ func SetupLink(linkDetails LinkDetails) {
 }
 
 func TearDownLink(linkDetails LinkDetails) {
-	time.Sleep(5 * time.Second) // if aggregated buffer size is 50MB it takes 4 seconds to empty
+	//time.Sleep(5 * time.Second) // if aggregated buffer size is 50MB it takes 4 seconds to empty
 	// var forceSetting bool = false
 	// var timeoutSetting uint = 0
 	err := network.Disconnect(ctx, linkDetails.NetworkName, linkDetails.NodeOneId, &network.DisconnectOptions{})

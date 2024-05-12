@@ -47,12 +47,24 @@ type FlatSatelliteLineData struct {
 //		PosZ        float64 `json:"pos_z" parquet:"name=pos_z, type=DOUBLE"`
 //		// Timestamp   int64   `parquet:"name=timestamp, type=INT64, convertedtype=TIMESTAMP_MILLIS"`
 //	}
-type FlatSatelliteLineDataIsrael struct { // <= QUESTION: What is this struct used for?
+type FlatSatelliteLineDataIsrael struct {
 	SatelliteID *int64   `json:"satellite_id" parquet:"name=satellite_id, type=INT64"`
 	Index       *int64   `json:"time_index" parquet:"name=time_index, type=INT64"`
 	PosX        *float64 `json:"pos_x" parquet:"name=pos_x, type=DOUBLE"`
 	PosY        *float64 `json:"pos_y" parquet:"name=pos_y, type=DOUBLE"`
 	PosZ        *float64 `json:"pos_z" parquet:"name=pos_z, type=DOUBLE"`
+	// Timestamp   int64   `parquet:"name=timestamp, type=INT64, convertedtype=TIMESTAMP_MILLIS"`
+}
+
+type FlatGroundStationLineDataIsrael struct {
+	//GroundStationTitle *string  `json:"groundstation_title" parquet:"name=groundstation_title, type=BYTE_ARRAY"`
+	GroundStationID *int64   `json:"groundstation_id" parquet:"name=groundstation_id, type=INT64"`
+	Index           *int64   `json:"time_index" parquet:"name=time_index, type=INT64"`
+	Latitude        *float64 `json:"latitude" parquet:"name=latitude, type=DOUBLE"`
+	Longitude       *float64 `json:"longitude" parquet:"name=longitude, type=DOUBLE"`
+	PosX            *float64 `json:"pos_x" parquet:"name=pos_x, type=DOUBLE"`
+	PosY            *float64 `json:"pos_y" parquet:"name=pos_y, type=DOUBLE"`
+	PosZ            *float64 `json:"pos_z" parquet:"name=pos_z, type=DOUBLE"`
 	// Timestamp   int64   `parquet:"name=timestamp, type=INT64, convertedtype=TIMESTAMP_MILLIS"`
 }
 
@@ -130,7 +142,7 @@ func WriteWorker(lineData <-chan SatelliteLineData, database_address string) err
 // Takes as input: the satellite positions over time (retrieved from "satellite_positions.py")
 // the positions (LatLong in radians) are used to calculate the LatLong in degrees.
 // Outputs: All satellites with their information are stored as OrbitalData instances in a slice
-func LoadSatellitePositions(fileName string, constellation string, startTime time.Time, timestep time.Duration) []space.OrbitalData {
+func LoadSatellitePositions(fileName string, constellation string, startTime time.Time, timestep time.Duration, satelliteTimeSteps int) []space.OrbitalData {
 
 	log.Printf("opening file\n")
 	fr, err := local.NewLocalFileReader(fileName)
@@ -140,7 +152,7 @@ func LoadSatellitePositions(fileName string, constellation string, startTime tim
 	defer fr.Close()
 
 	log.Printf("opening reader")
-	pr, err := reader.NewParquetReader(fr, new(FlatSatelliteLineDataIsrael), 4) // <= QUESTION: what does the last parameter do?
+	pr, err := reader.NewParquetReader(fr, new(FlatSatelliteLineDataIsrael), 4)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -162,9 +174,8 @@ func LoadSatellitePositions(fileName string, constellation string, startTime tim
 	} else {
 		log.Fatal("constellation was not correctly specified", constellation)
 	}
-	const SatelliteTimeSteps = 1000 // TODO: Remove hard coded simulation parameters
 
-	expected_row_count := NumberOfSatellites * SatelliteTimeSteps
+	expected_row_count := NumberOfSatellites * satelliteTimeSteps
 	if int(row_count) != expected_row_count { // TODO: Make a check that not only compares length but checks if entries are empty
 		log.Fatal("parquet file length does not match number of expected elements", row_count)
 	}
@@ -179,16 +190,16 @@ func LoadSatellitePositions(fileName string, constellation string, startTime tim
 			Isactive:    true,
 			SatelliteId: sid,
 			Title:       strconv.Itoa(sid), // int to string
-			Position:    make([]space.Vector3, SatelliteTimeSteps),
-			Velocity:    make([]space.Vector3, SatelliteTimeSteps),
-			LatLong:     make([]space.LatLong, SatelliteTimeSteps),
+			Position:    make([]space.Vector3, satelliteTimeSteps),
+			Velocity:    make([]space.Vector3, satelliteTimeSteps),
+			LatLong:     make([]space.LatLong, satelliteTimeSteps),
 		}
 		satdata[sid] = orbitalData
 	}
-	//tstart := time.Date(2023, 5, 9, 12, 0, 0, 0, time.UTC) 						// TODO: figure out if it was on purpose that this time and date did not match the time specified in main.go
+	//tstart := time.Date(2023, 5, 9, 12, 0, 0, 0, time.UTC)
 	tstart := startTime
 
-	for timeindex := 0; timeindex < SatelliteTimeSteps; timeindex++ {
+	for timeindex := 0; timeindex < satelliteTimeSteps; timeindex++ {
 
 		// make slice of FlatSatelliteLineDataIsrael structs
 		lines := make([]FlatSatelliteLineDataIsrael, NumberOfSatellites)
@@ -203,7 +214,6 @@ func LoadSatellitePositions(fileName string, constellation string, startTime tim
 		for satellite_index, line := range lines {
 			// log.Printf("position %d \n%v", index, line)
 
-			// division by 1000 is to translate from meters to kilometers
 			position := space.Vector3{X: *line.PosX / 1000, Y: *line.PosY / 1000, Z: *line.PosZ / 1000}
 			satdata[satellite_index].Position[timeindex] = position
 			// input: earth-centered intertial LatLong coordinates in radians | returns LatLong coordinates in degrees
@@ -213,4 +223,81 @@ func LoadSatellitePositions(fileName string, constellation string, startTime tim
 	}
 
 	return satdata
+}
+
+func LoadGroundStationPositions(fileName string, startTime time.Time, timestep time.Duration, groundstationTimeSteps int) []space.GroundStation {
+
+	gs_list := [4]string{"Madrid", "ElAlamo", "Tokyo", "Koto"}
+
+	log.Printf("opening file\n")
+	fr, err := local.NewLocalFileReader(fileName)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer fr.Close()
+
+	log.Printf("opening reader")
+	pr, err := reader.NewParquetReader(fr, new(FlatGroundStationLineDataIsrael), 4)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer pr.ReadStop()
+	log.Println(pr.Footer.Schema)
+
+	log.Printf("reading row count")
+	row_count := pr.GetNumRows()
+	log.Printf("%d\n", row_count)
+
+	NumberOfGroundStations := 4
+
+	expected_row_count := NumberOfGroundStations * groundstationTimeSteps
+	if int(row_count) != expected_row_count { // TODO: Make a check that not only compares length but checks if entries are empty
+		log.Fatal("parquet file length does not match number of expected elements", row_count)
+	}
+
+	// make slice of OrbitalData structs
+	gsdata := make([]space.GroundStation, NumberOfGroundStations)
+	// create one OrbitalData instance for each satellite, give it ID and title
+	for sid := 0; sid < NumberOfGroundStations; sid++ {
+		// log.Printf("sid %d \n", sid)
+
+		groundstationData := space.GroundStation{
+			Title:    "",
+			ID:       sid,
+			Latlong:  space.LatLong{Latitude: 0.0, Longitude: 0.0},
+			Position: make([]space.Vector3, groundstationTimeSteps),
+			IsAP:     true,
+			Isactive: false,
+		}
+		gsdata[sid] = groundstationData
+	}
+	//tstart := time.Date(2023, 5, 9, 12, 0, 0, 0, time.UTC)
+	tstart := startTime
+
+	for timeindex := 0; timeindex < groundstationTimeSteps; timeindex++ {
+
+		// make slice of FlatGroundStationLineDataIsrael structs
+		lines := make([]FlatGroundStationLineDataIsrael, NumberOfGroundStations)
+		// use parquet reader to unmarshal the rows of the parquet file to the slice of FlatSatelliteLineDataIsrael-structs
+		err = pr.Read(&lines)
+		if err != nil {
+			log.Fatal(err)
+		}
+		// log.Printf("copying data for sid %d index: %d\n", sid, index)
+
+		// each line is a FlatGroundStationLineDataIsrael instance | the outer for-loop controls what timeindex we view the satellite at
+		for groundstation_index, line := range lines {
+			gsdata[groundstation_index].Title = gs_list[groundstation_index]
+			gsdata[groundstation_index].Latlong = space.LatLong{Latitude: *line.Latitude, Longitude: *line.Longitude}
+			position := space.Vector3{X: *line.PosX / 1000, Y: *line.PosY / 1000, Z: *line.PosZ / 1000}
+			gsdata[groundstation_index].Position[timeindex] = position
+			// input: earth-centered intertial LatLong coordinates in radians | returns LatLong coordinates in degrees
+			if gs_list[groundstation_index] == "ElAlamo" || gs_list[groundstation_index] == "Koto" {
+				gsdata[groundstation_index].IsAP = false
+			}
+		}
+		tstart = tstart.Add(timestep)
+	}
+
+	return gsdata
 }
